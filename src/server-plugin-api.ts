@@ -24,6 +24,8 @@ export {
   type PluginCatalogProject,
   type PluginCatalogWorkspace,
   type PluginSessionSnapshot,
+  type PluginSessionHistoryPage,
+  type PluginSessionHistoryPageRequest,
   type PluginWorkspaceSelection,
   type PluginSessionSelection,
   type PluginCatalogReadOptions,

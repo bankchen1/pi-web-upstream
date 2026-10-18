@@ -20,14 +20,19 @@ function fixture() {
     return Promise.resolve(project);
   }) };
   const workspaces = { resolve: vi.fn(() => Promise.resolve({ projectId: project.id, status: "provider" as const, diagnostics: [], workspaces: rows })) };
-  const sessions = { listCatalogSessions: vi.fn((cwd: string, signal?: AbortSignal): Promise<readonly PluginSessionSnapshot[]> => {
-    signal?.throwIfAborted();
-    return Promise.resolve([
-    { id: "cold", cwd, archived: true, runtime: "not-hosted", metadata },
-    { id: "idle", cwd: repositoryPath, archived: false, runtime: "idle" },
-    { id: "busy", cwd: repositoryPath, archived: false, runtime: "busy", name: "Working" },
-  ]);
-  }) };
+  const sessions = {
+    listCatalogSessions: vi.fn((cwd: string, signal?: AbortSignal): Promise<readonly PluginSessionSnapshot[]> => {
+      signal?.throwIfAborted();
+      return Promise.resolve([
+        { id: "cold", cwd, archived: true, runtime: "not-hosted", metadata },
+        { id: "idle", cwd: repositoryPath, archived: false, runtime: "idle" },
+        { id: "busy", cwd: repositoryPath, archived: false, runtime: "busy", name: "Working" },
+      ]);
+    }),
+    inspectionMessages: vi.fn((ref: { id: string; cwd: string }, page?: { before?: number; limit?: number }) => Promise.resolve({
+      messages: [{ role: "user", content: `${ref.id}:${String(page?.limit ?? "all")}` }], start: 0, total: 1,
+    })),
+  };
   const lifetime = new AbortController();
   const instance = createServerPluginCatalogCapabilityFactory({ projects, workspaces, sessions }).create({
     pluginId: "consumer", packageRoot: "/plugins/consumer", lifetimeSignal: lifetime.signal,
@@ -56,8 +61,18 @@ describe("server plugin catalog capability", () => {
     expect(Object.isFrozen(sessions)).toBe(true);
     expect(Object.isFrozen(sessions[0]?.metadata?.["owner"])).toBe(true);
     expect(Object.isFrozen(workspaces[0]?.provider?.metadata)).toBe(true);
-    expect(Object.keys(f.catalog.sessions)).toEqual(["list", "get"]);
+    expect(Object.keys(f.catalog.sessions)).toEqual(["list", "get", "readMessages"]);
     expect(f.sessions.listCatalogSessions).toHaveBeenCalledWith(repositoryPath, expect.any(AbortSignal));
+  });
+
+  it("reads history only after rechecking project, workspace and session scope", async () => {
+    const f = fixture();
+    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { before: 4, limit: 10 })).resolves.toEqual({
+      messages: [{ role: "user", content: "cold:10" }], start: 0, total: 1,
+    });
+    expect(f.sessions.inspectionMessages).toHaveBeenCalledWith({ id: "cold", cwd: repositoryPath }, { before: 4, limit: 10 });
+    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "missing" })).rejects.toThrow("session is stale or unavailable");
+    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { limit: 101 })).rejects.toThrow("Invalid PI WEB host catalog capability v1 data");
   });
 
   it("re-resolves authority and rejects stale workspaces, missing projects and sessions", async () => {
