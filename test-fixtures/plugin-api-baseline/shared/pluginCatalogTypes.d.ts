@@ -19,6 +19,10 @@ export interface PluginSessionSnapshot {
     readonly name?: string;
     readonly metadata?: SessionUiMetadata;
     readonly archived: boolean;
+    /** Stable ID of a parent session in the same authorized workspace, when present. */
+    readonly parentSessionId?: string;
+    /** PI WEB archive timestamp, when this session is archived. */
+    readonly archivedAt?: string;
     readonly runtime: "not-hosted" | "idle" | "busy";
 }
 export interface PluginWorkspaceSelection {
@@ -31,6 +35,7 @@ export interface PluginSessionSelection extends PluginWorkspaceSelection {
 export interface PluginSessionHistoryPageRequest {
     readonly before?: number;
     readonly limit?: number;
+    readonly allowPartialTurn?: boolean;
 }
 export interface PluginSessionHistoryPage {
     readonly messages: readonly unknown[];
