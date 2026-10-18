@@ -8,7 +8,7 @@ const cwd = resolve("/repo");
 const selection = { projectId: "p", workspaceId: "w", sessionId: "cold" };
 const snapshot: PluginSessionActivityV1Snapshot = {
   session: { id: "cold", cwd, archived: true, runtime: "not-hosted" },
-  lifecycle: "archived", runtimeLoaded: false, activity: "idle",
+  lifecycle: "archived", runtimeLoaded: false, activity: "unknown",
   status: {
     persisted: true, isStreaming: null, isCompacting: null, isBashRunning: null,
     pendingMessageCount: null, messageCount: 4,

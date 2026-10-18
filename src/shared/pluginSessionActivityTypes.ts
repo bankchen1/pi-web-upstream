@@ -15,7 +15,7 @@ export interface PluginSessionActivityV1Snapshot {
   readonly session: PluginSessionSnapshot;
   readonly lifecycle: "starting" | "active" | "archived";
   readonly runtimeLoaded: boolean;
-  readonly activity: "working" | "waiting" | "idle";
+  readonly activity: "working" | "waiting" | "idle" | "unknown";
   readonly status: {
     readonly persisted: boolean | null;
     readonly isStreaming: boolean | null;
@@ -82,7 +82,7 @@ function snapshotResult(value: unknown): PluginSessionActivityV1Snapshot {
   const activity = row["activity"];
   const runtimeLoaded = boolean(row["runtimeLoaded"]);
   if ((lifecycle !== "starting" && lifecycle !== "active" && lifecycle !== "archived")
-    || (activity !== "working" && activity !== "waiting" && activity !== "idle")) throw invalid();
+    || (activity !== "working" && activity !== "waiting" && activity !== "idle" && activity !== "unknown")) throw invalid();
   const status = record(row["status"]);
   const queue = record(status["queueState"]);
   const telemetry = record(status["telemetry"]);

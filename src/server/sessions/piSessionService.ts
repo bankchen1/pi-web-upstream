@@ -43,6 +43,7 @@ import { getBuiltinExtensionFactories } from "./builtinExtensionFactories.js";
 import { McpAuthFlowService } from "./mcpAuthFlowService.js";
 import type { SessionMedia } from "./sessionMediaIndex.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
+import { pageHostedSessionHistory } from "./sessionHistoryPageReader.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { BUILTIN_COMMANDS } from "./builtinCommands.js";
@@ -401,6 +402,7 @@ export interface PiSessionManager {
   getSessionId(): string;
   getSessionFile(): string | undefined;
   getBranch(): unknown[];
+  getEntry?(id: string): object | undefined;
   getEntries?(): readonly unknown[];
   getTree?(): readonly ProjectableSessionTreeNode[];
   getLeafId(): string | null;
@@ -1647,7 +1649,9 @@ export class PiSessionService implements SessionRouteService {
         queueState: { available: false, reason: "runtime_not_loaded" },
         telemetry: { available: false, reason: "runtime_not_loaded" },
       };
-      activity = !archived && relatedWorking > 0 ? "working" : "idle";
+      // A cold runtime cannot prove the parent session is idle. Persisted,
+      // verified running children are positive evidence; otherwise report unknown.
+      activity = !archived && relatedWorking > 0 ? "working" : "unknown";
     } else {
       const activeExecution = !archived && (this.treeNavigations.has(hosted)
         || this.isSessionEntryMutationActive(hosted)
@@ -2760,6 +2764,14 @@ export class PiSessionService implements SessionRouteService {
     const boundedPage = { limit: 100, ...page, maxMessages: 500, maxBytes: 8 * 1024 * 1024 };
     const hosted = this.activeForRef(ref)?.runtime.session ?? this.startupSessionForRef(ref);
     if (hosted !== undefined) {
+      if (!this.hasActiveWork(hosted) && !this.unpersistedTreeBranchLeaves.has(hosted) && hosted.sessionManager.getEntry !== undefined) {
+        const manager = hosted.sessionManager;
+        const result = pageHostedSessionHistory({ getLeafId: () => manager.getLeafId(), getEntry: (id) => manager.getEntry?.(id) }, boundedPage, signal);
+        const messages = result.messages.map((message) => projectBrowserMessage(this.browserTranscriptMessage(hosted, message)));
+        assertInspectionPageBudget(messages, boundedPage.maxBytes);
+        signal?.throwIfAborted();
+        return { ...result, messages };
+      }
       const branch = this.hasActiveWork(hosted) ? hosted.sessionManager.getBranch() : await this.readableSessionBranch(ref, hosted);
       signal?.throwIfAborted();
       const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(branch), boundedPage);

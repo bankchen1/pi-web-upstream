@@ -8,7 +8,7 @@ function snapshot() {
     session: { id: "s", cwd: "/repo", archived: false, runtime: "not-hosted" },
     lifecycle: "active",
     runtimeLoaded: false,
-    activity: "idle",
+    activity: "unknown",
     status: {
       persisted: true,
       isStreaming: null,

@@ -3,12 +3,33 @@ import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readSessionHistoryPage } from "./sessionHistoryPageReader.js";
+import { pageHostedSessionHistory, readSessionHistoryPage } from "./sessionHistoryPageReader.js";
 
 const directories: string[] = [];
 afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))));
 
 describe("streamed session history pages", () => {
+  it("pages an already-hosted parent-linked branch without calling getBranch", () => {
+    const entries = new Map([
+      ["u1", { type: "message", id: "u1", message: { role: "user", content: "first" } }],
+      ["a1", { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: "answer one" } }],
+      ["u2", { type: "message", id: "u2", parentId: "a1", message: { role: "user", content: "second" } }],
+      ["t2", { type: "thinking_level_change", id: "t2", parentId: "u2", thinkingLevel: "high" }],
+      ["a2", { type: "message", id: "a2", parentId: "t2", message: { role: "assistant", content: "answer two" } }],
+    ]);
+    const getEntry = (id: string) => entries.get(id);
+    const result = pageHostedSessionHistory({ getLeafId: () => "a2", getEntry }, { before: 4, limit: 1, maxBytes: 1024 });
+
+    expect(result).toEqual({
+      messages: [
+        { role: "user", content: "second", entryId: "u2" },
+        { role: "assistant", content: "answer two", thinkingLevel: "high", entryId: "a2" },
+      ],
+      start: 2,
+      total: 4,
+    });
+  });
+
   it("reads the active parent-linked branch and preserves projection and safe turn boundaries", async () => {
     const path = await transcript([
       { type: "session", id: "header", cwd: "/workspace" },

@@ -13,7 +13,7 @@ export interface PluginSessionActivityV1Snapshot {
     readonly session: PluginSessionSnapshot;
     readonly lifecycle: "starting" | "active" | "archived";
     readonly runtimeLoaded: boolean;
-    readonly activity: "working" | "waiting" | "idle";
+    readonly activity: "working" | "waiting" | "idle" | "unknown";
     readonly status: {
         readonly persisted: boolean | null;
         readonly isStreaming: boolean | null;

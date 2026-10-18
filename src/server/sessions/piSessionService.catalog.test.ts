@@ -33,12 +33,12 @@ describe("read-only session catalog", () => {
     });
     try {
       await expect(service.inspectSessionActivity("/workspace", "cold")).resolves.toMatchObject({
-        session: { id: "cold", runtime: "not-hosted" }, lifecycle: "active", runtimeLoaded: false, activity: "idle",
+        session: { id: "cold", runtime: "not-hosted" }, lifecycle: "active", runtimeLoaded: false, activity: "unknown",
         status: { messageCount: 4, pendingMessageCount: null, queueState: { available: false }, telemetry: { available: false } },
         relatedExecutions: { supportedKinds: ["subsession"], unsupportedKinds: ["background-agent", "terminal", "process"] },
       });
       await expect(service.inspectSessionActivity("/workspace", "archived")).resolves.toMatchObject({
-        session: { id: "archived", archived: true }, lifecycle: "archived", runtimeLoaded: false, activity: "idle",
+        session: { id: "archived", archived: true }, lifecycle: "archived", runtimeLoaded: false, activity: "unknown",
         status: { messageCount: 7, isStreaming: null, telemetry: { available: false } },
       });
       expect(readMessagePage).toHaveBeenCalledWith("/sessions/cold.jsonl", { limit: 1, maxMessages: 500, maxBytes: 8 * 1024 * 1024 }, undefined);
