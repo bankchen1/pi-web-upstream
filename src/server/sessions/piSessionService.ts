@@ -434,6 +434,8 @@ export interface PiSessionManagerGateway {
   readBranch?(path: string): Promise<unknown[] | undefined>;
   /** Read all branches, sharing the read-only parsed snapshot with readBranch. */
   readEntries?(path: string): Promise<readonly unknown[] | undefined>;
+  /** Reuse a stable, already-open runtime snapshot for its first idle read. */
+  readBranchFromOpenedSession?(path: string, manager: PiSessionManager): Promise<unknown[] | undefined>;
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager;
   /**
    * Cross-project listing of Pi's session stores (the default store plus any
@@ -4096,7 +4098,9 @@ export class PiSessionService implements SessionRouteService {
     if (this.hasActiveWork(session)) return session.sessionManager.getBranch();
     const path = sessionFile ?? resolvedPath;
     if (path === undefined) return session.sessionManager.getBranch();
-    const snapshot = await this.sessionManager.readBranch(path);
+    let snapshot = await this.sessionManager.readBranchFromOpenedSession?.(path, session.sessionManager);
+    if (this.hasActiveWork(session)) return session.sessionManager.getBranch();
+    snapshot ??= await this.sessionManager.readBranch(path);
     // No snapshot exists when the transcript file is absent (a session known
     // by path but never persisted, or externally removed): the runtime branch
     // is the only readable branch then.
