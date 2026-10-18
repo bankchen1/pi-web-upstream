@@ -1,6 +1,10 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { PiSessionService } from "./piSessionService.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
+import { PiSessionService, projectSessionActivitySubsessions } from "./piSessionService.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
+import { SessionUnreadStore } from "./sessionUnreadStore.js";
 
 describe("read-only session catalog", () => {
   it("inspects cold and archived session activity without creating a Pi runtime", async () => {
@@ -64,6 +68,65 @@ describe("read-only session catalog", () => {
     } finally {
       await service.dispose();
     }
+  });
+
+  it("classifies a queued prompt as waiting while the runtime is not executing", async () => {
+    const fake = fakeRuntime("queued", { isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 1 });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: sessionGateway([]),
+      archiveStore: emptyArchiveStore(), createAgentRuntime: runtimeCreator(fake.runtime),
+    });
+    try {
+      await service.start("/workspace");
+      await expect(service.inspectSessionActivity("/workspace", "queued")).resolves.toMatchObject({
+        activity: "waiting", status: { isStreaming: false, pendingMessageCount: 1 },
+      });
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("does not persist unread exclusions when inspecting an unhydrated persisted relation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-session-activity-readonly-"));
+    const parentFile = join(root, "parent.jsonl");
+    const childFile = join(root, "child.jsonl");
+    await writeFile(parentFile, `${JSON.stringify({ type: "session", id: "parent", cwd: "/workspace" })}\n`);
+    await writeFile(childFile, `${JSON.stringify({ type: "session", id: "child", cwd: "/workspace", parentSession: parentFile })}\n`);
+    const parentLink = { type: "custom", customType: "pi-web.subsession.link", data: {
+      version: 1, spawnedBySessionId: "parent", spawnedSessionId: "child", spawnedSessionFile: childFile, cwd: "/workspace",
+    } };
+    const manager = fakeSessionManager("/workspace", { getEntries: () => [parentLink] });
+    const gateway = sessionGateway([{ ...sessionRecord("parent"), path: parentFile }]);
+    gateway.open = vi.fn(() => manager);
+    gateway.readMessagePage = vi.fn(() => Promise.resolve({ messages: [], start: 0, total: 0 }));
+    const events = new CapturingSessionEventHub();
+    const unreadStore = new SessionUnreadStore();
+    const excludeSession = vi.spyOn(unreadStore, "excludeSession");
+    const service = new PiSessionService(events, {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: gateway,
+      archiveStore: emptyArchiveStore(), unreadStore,
+    });
+    try {
+      await expect(service.inspectSessionActivity("/workspace", "parent")).resolves.toMatchObject({
+        relatedExecutions: { totalCount: 1, executions: [{ sessionId: "child", status: "idle" }] },
+      });
+      expect(excludeSession).not.toHaveBeenCalled();
+      expect(events.globalEvents).toEqual([]);
+      expect(events.sessionEvents).toEqual([]);
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aggregates working subsessions beyond the bounded activity projection", () => {
+    const children = Array.from({ length: 101 }, (_, index) => ({
+      sessionId: `child-${String(index)}`, cwd: "/workspace", status: index === 100 ? "working" as const : "idle" as const,
+    }));
+    expect(projectSessionActivitySubsessions("parent", "/workspace", children, false)).toMatchObject({
+      totalCount: 101, workingCount: 1, truncated: true,
+    });
+    expect(projectSessionActivitySubsessions("parent", "/workspace", children, false).executions).toHaveLength(100);
   });
 
   it("projects same-workspace parent IDs and archive timestamps without exposing session paths", async () => {

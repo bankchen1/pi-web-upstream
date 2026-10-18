@@ -1609,32 +1609,23 @@ export class PiSessionService implements SessionRouteService {
     const lifecycle = archived ? "archived" : startup === undefined ? "active" : "starting";
     const relatedRows: PluginSessionActivityV1Snapshot["relatedExecutions"]["executions"][number][] = [];
     let truncated = false;
+    let childrenTotalCount = 0;
+    let relatedWorking = 0;
     const archive = archived ? await this.getArchived(ref) : undefined;
     const file = archive?.archivePath ?? (await this.sessionManager.resolveSessionFile(cwd, sessionId))?.path
       ?? (hosted === undefined ? undefined : hosted.sessionFile);
     if (file !== undefined) {
-      // listSubsessions verifies persisted parent links against the exact child
-      // file. It may populate an in-memory relation cache, but never creates a
-      // PiAgent runtime or appends transcript entries.
-      const children = await this.listSubsessions(sessionId, file);
-      for (const child of children) {
-        if (child.cwd !== cwd) { truncated = true; continue; }
-        if (relatedRows.length >= 100) { truncated = true; continue; }
-        const status = child.status === "error" ? "failed" : child.status;
-        relatedRows.push({
-          id: `subsession:${child.sessionId}`,
-          kind: "subsession",
-          parentSessionId: sessionId,
-          sessionId: child.sessionId,
-          status,
-          canStop: status === "working",
-          canOpenSession: true,
-        });
-      }
+      // Activity reads verify persisted links without registering them in the
+      // runtime lifecycle. Registration also changes durable unread state.
+      const children = await this.inspectPersistedSubsessionsForParent(sessionId, file, hosted?.sessionManager);
+      const projected = projectSessionActivitySubsessions(sessionId, cwd, children, archived);
+      relatedRows.push(...projected.executions);
+      truncated = projected.truncated;
+      childrenTotalCount = projected.totalCount;
+      relatedWorking = projected.workingCount;
     }
     signal?.throwIfAborted();
 
-    const relatedWorking = archived ? 0 : relatedRows.filter((execution) => execution.status === "working").length;
     let status: PluginSessionActivityV1Snapshot["status"];
     let activity: PluginSessionActivityV1Snapshot["activity"];
     if (hosted === undefined) {
@@ -1651,18 +1642,22 @@ export class PiSessionService implements SessionRouteService {
       };
       activity = !archived && relatedWorking > 0 ? "working" : "idle";
     } else {
-      const activeWork = !archived && this.hasActiveWork(hosted);
+      const activeExecution = !archived && (this.treeNavigations.has(hosted)
+        || this.isSessionEntryMutationActive(hosted)
+        || this.isTreeExclusiveOperationActive(hosted)
+        || hosted.isStreaming || hosted.isCompacting || hosted.isBashRunning);
       const steeringCount = hosted.getSteeringMessages().length;
       const followUpCount = hosted.getFollowUpMessages().length;
       const compactionFollowUpCount = this.compactionQueuedMessages(sessionId).length;
       const stats = hosted.getSessionStats();
       const contextUsage = hosted.getContextUsage();
+      const pendingMessageCount = this.pendingMessageCount(hosted);
       status = {
         persisted: sessionFileExists(hosted.sessionFile),
         isStreaming: hosted.isStreaming,
         isCompacting: hosted.isCompacting,
         isBashRunning: hosted.isBashRunning,
-        pendingMessageCount: this.pendingMessageCount(hosted),
+        pendingMessageCount,
         messageCount: transcriptMessageCount(hosted.sessionManager.getBranch()),
         queueState: { available: true, steeringCount, followUpCount, compactionFollowUpCount },
         telemetry: {
@@ -1672,8 +1667,8 @@ export class PiSessionService implements SessionRouteService {
           ...(contextUsage === undefined ? {} : { contextUsage }),
         },
       };
-      activity = archived ? "idle" : activeWork || relatedWorking > 0 ? "working"
-        : steeringCount + followUpCount + compactionFollowUpCount > 0 ? "waiting" : "idle";
+      activity = archived ? "idle" : activeExecution || relatedWorking > 0 ? "working"
+        : pendingMessageCount > 0 ? "waiting" : "idle";
     }
     signal?.throwIfAborted();
     return Object.freeze({
@@ -1687,8 +1682,8 @@ export class PiSessionService implements SessionRouteService {
         unsupportedKinds: ["background-agent", "terminal", "process"] as const,
         truncated,
         executions: relatedRows,
-        workingCount: relatedRows.filter(({ status: state }) => state === "working").length,
-        totalCount: relatedRows.length,
+        workingCount: relatedWorking,
+        totalCount: childrenTotalCount,
       },
     });
   }
@@ -2204,6 +2199,43 @@ export class PiSessionService implements SessionRouteService {
     if (childIds === undefined) return [];
     const authorizedChildIds = [...childIds].filter((childId) => this.subsessionLinkBelongsToParent(parentSessionId, parentFile, childId));
     return Promise.all(authorizedChildIds.map(async (childId) => ({ sessionId: childId, ...(await this.subsessionSummaryFields(childId)) })));
+  }
+
+  private async inspectPersistedSubsessionsForParent(
+    parentSessionId: string,
+    parentSessionFile: string,
+    knownManager?: PiSessionManager,
+  ): Promise<SubsessionSummary[]> {
+    if ((await readSessionHeaderSummary(parentSessionFile))?.id !== parentSessionId) return [];
+    let parentManager = knownManager;
+    if (parentManager === undefined) {
+      try { parentManager = this.sessionManager.open(parentSessionFile); }
+      catch { return []; }
+    }
+    const linksByChild = new Map<string, TrackedSubsessionLink>();
+    for (const link of this.subsessionLinks.values()) {
+      if (link.parentSessionId === parentSessionId && trackedLinkParentFileMatches(link, parentSessionFile)) {
+        linksByChild.set(link.childSessionId, link);
+      }
+    }
+    const entries = parentManager.getEntries?.() ?? parentManager.getBranch();
+    for (const entry of entries) {
+      const persisted = parsePersistedParentSubsessionLink(entry);
+      if (persisted?.spawnedBySessionId !== parentSessionId) continue;
+      const verified = await this.verifiedSubsessionLinkFromParentLink(parentSessionId, parentSessionFile, persisted);
+      if (verified !== undefined) linksByChild.set(verified.childSessionId, verified);
+    }
+    return Promise.all([...linksByChild.values()].map(async (link) => {
+      const header = link.childSessionFile === undefined ? undefined : await readSessionHeaderSummary(link.childSessionFile);
+      const validHeader = header?.id === link.childSessionId
+        && header.parentSession !== undefined && sessionPathsEqual(header.parentSession, parentSessionFile);
+      const active = this.activeChildForSubsessionLink(link);
+      return {
+        sessionId: link.childSessionId,
+        cwd: active?.runtime.cwd ?? nonEmptyString(link.cwd) ?? (validHeader ? nonEmptyString(header.cwd) : undefined) ?? "",
+        status: active !== undefined ? this.subsessionStatus(active.runtime.session) : validHeader ? "idle" : "unknown",
+      };
+    }));
   }
 
   /** Collect ready answers before deciding whether the parent needs to wait. */
@@ -5281,6 +5313,38 @@ export class PiSessionService implements SessionRouteService {
   private hasQueuedMessageText(session: PiAgentSession, text: string): boolean {
     return this.queuedMessages(session).some((message) => message.text === text);
   }
+}
+
+export function projectSessionActivitySubsessions(
+  parentSessionId: string,
+  cwd: string,
+  children: readonly SubsessionSummary[],
+  archived: boolean,
+): {
+  executions: PluginSessionActivityV1Snapshot["relatedExecutions"]["executions"];
+  totalCount: number;
+  workingCount: number;
+  truncated: boolean;
+} {
+  const matching = children.filter((child) => cwdPathsEqual(child.cwd, cwd));
+  const executions = matching.slice(0, 100).map((child) => {
+    const status: PluginSessionActivityV1Snapshot["relatedExecutions"]["executions"][number]["status"] = child.status === "error" ? "failed" : child.status;
+    return {
+      id: `subsession:${child.sessionId}`,
+      kind: "subsession" as const,
+      parentSessionId,
+      sessionId: child.sessionId,
+      status,
+      canStop: status === "working",
+      canOpenSession: true as const,
+    };
+  });
+  return {
+    executions,
+    totalCount: matching.length,
+    workingCount: archived ? 0 : matching.filter((child) => child.status === "working").length,
+    truncated: matching.length > executions.length || matching.length !== children.length,
+  };
 }
 
 function previewResponseFromPlan(plan: SessionCleanupPlan): ClientSessionCleanupPreviewResponse {
