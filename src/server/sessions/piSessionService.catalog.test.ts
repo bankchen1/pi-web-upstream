@@ -1,9 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService, projectSessionActivitySubsessions } from "./piSessionService.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
+import { createPiSessionManagerGateway } from "./piSessionManagerGateway.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
 import { SessionUnreadStore } from "./sessionUnreadStore.js";
 
 describe("read-only session catalog", () => {
@@ -95,9 +97,9 @@ describe("read-only session catalog", () => {
     const parentLink = { type: "custom", customType: "pi-web.subsession.link", data: {
       version: 1, spawnedBySessionId: "parent", spawnedSessionId: "child", spawnedSessionFile: childFile, cwd: "/workspace",
     } };
-    const manager = fakeSessionManager("/workspace", { getEntries: () => [parentLink] });
     const gateway = sessionGateway([{ ...sessionRecord("parent"), path: parentFile }]);
-    gateway.open = vi.fn(() => manager);
+    gateway.open = vi.fn(() => { throw new Error("cold inspection must not open a Pi session manager"); });
+    gateway.readEntries = vi.fn(() => Promise.resolve([parentLink]));
     gateway.readMessagePage = vi.fn(() => Promise.resolve({ messages: [], start: 0, total: 0 }));
     const events = new CapturingSessionEventHub();
     const unreadStore = new SessionUnreadStore();
@@ -123,10 +125,61 @@ describe("read-only session catalog", () => {
     const children = Array.from({ length: 101 }, (_, index) => ({
       sessionId: `child-${String(index)}`, cwd: "/workspace", status: index === 100 ? "working" as const : "idle" as const,
     }));
-    expect(projectSessionActivitySubsessions("parent", "/workspace", children, false)).toMatchObject({
+    expect(projectSessionActivitySubsessions("parent", "/workspace", children)).toMatchObject({
       totalCount: 101, workingCount: 1, truncated: true,
     });
-    expect(projectSessionActivitySubsessions("parent", "/workspace", children, false).executions).toHaveLength(100);
+    expect(projectSessionActivitySubsessions("parent", "/workspace", children).executions).toHaveLength(100);
+  });
+
+  it("keeps archived parent counts consistent with a working child", () => {
+    expect(projectSessionActivitySubsessions("parent", "/workspace", [
+      { sessionId: "working-child", cwd: "/workspace", status: "working" },
+    ])).toMatchObject({
+      totalCount: 1, workingCount: 1,
+      executions: [{ sessionId: "working-child", status: "working", canStop: true }],
+    });
+  });
+
+  it("does not infer a workspace for empty or relative child paths", () => {
+    const cwd = process.cwd();
+    expect(projectSessionActivitySubsessions("parent", cwd, [
+      { sessionId: "unknown", cwd: "", status: "working" },
+      { sessionId: "relative", cwd: ".", status: "idle" },
+    ])).toMatchObject({ totalCount: 0, workingCount: 0, executions: [], truncated: true });
+  });
+
+  it("does not rewrite a legacy parent transcript during cold activity inspection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-session-activity-transcript-readonly-"));
+    const sessions = join(root, "sessions");
+    const parentFile = join(sessions, "parent.jsonl");
+    const childFile = join(sessions, "child.jsonl");
+    await mkdir(sessions, { recursive: true });
+    const parentText = [
+      JSON.stringify({ type: "session", version: 1, id: "parent", timestamp: "2026-10-17T12:00:00.000Z", cwd: "/workspace" }),
+      JSON.stringify({ type: "custom", customType: "pi-web.subsession.link", data: {
+        version: 1, spawnedBySessionId: "parent", spawnedSessionId: "child", spawnedSessionFile: childFile, cwd: "/workspace",
+      } }),
+    ].join("\n") + "\n";
+    await writeFile(parentFile, parentText);
+    await writeFile(childFile, `${JSON.stringify({ type: "session", version: 1, id: "child", timestamp: "2026-10-17T12:00:00.000Z", cwd: "/workspace", parentSession: parentFile })}\n`);
+    const gateway = createPiSessionManagerGateway({
+      agentDir: join(root, "agent"), env: { PI_CODING_AGENT_SESSION_DIR: sessions },
+    });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: join(root, "agent"), modelRuntime: testModelRuntime, sessionManager: gateway,
+      archiveStore: emptyArchiveStore(),
+    });
+    try {
+      const before = createHash("sha256").update(await readFile(parentFile)).digest("hex");
+      await expect(service.inspectSessionActivity("/workspace", "parent")).resolves.toMatchObject({
+        relatedExecutions: { totalCount: 1, executions: [{ sessionId: "child", status: "idle" }] },
+      });
+      const after = createHash("sha256").update(await readFile(parentFile)).digest("hex");
+      expect(after).toBe(before);
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("projects same-workspace parent IDs and archive timestamps without exposing session paths", async () => {

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
@@ -1618,7 +1618,7 @@ export class PiSessionService implements SessionRouteService {
       // Activity reads verify persisted links without registering them in the
       // runtime lifecycle. Registration also changes durable unread state.
       const children = await this.inspectPersistedSubsessionsForParent(sessionId, file, hosted?.sessionManager);
-      const projected = projectSessionActivitySubsessions(sessionId, cwd, children, archived);
+      const projected = projectSessionActivitySubsessions(sessionId, cwd, children);
       relatedRows.push(...projected.executions);
       truncated = projected.truncated;
       childrenTotalCount = projected.totalCount;
@@ -2207,18 +2207,19 @@ export class PiSessionService implements SessionRouteService {
     knownManager?: PiSessionManager,
   ): Promise<SubsessionSummary[]> {
     if ((await readSessionHeaderSummary(parentSessionFile))?.id !== parentSessionId) return [];
-    let parentManager = knownManager;
-    if (parentManager === undefined) {
-      try { parentManager = this.sessionManager.open(parentSessionFile); }
-      catch { return []; }
-    }
     const linksByChild = new Map<string, TrackedSubsessionLink>();
     for (const link of this.subsessionLinks.values()) {
       if (link.parentSessionId === parentSessionId && trackedLinkParentFileMatches(link, parentSessionFile)) {
         linksByChild.set(link.childSessionId, link);
       }
     }
-    const entries = parentManager.getEntries?.() ?? parentManager.getBranch();
+    // Opening a cold Pi SessionManager may migrate and rewrite legacy JSONL.
+    // Hosted managers are already live; cold and archived transcripts must use
+    // the gateway's read-only parser instead.
+    const entries = knownManager === undefined
+      ? await this.sessionManager.readEntries?.(parentSessionFile)
+      : knownManager.getEntries?.() ?? knownManager.getBranch();
+    if (entries === undefined) return [];
     for (const entry of entries) {
       const persisted = parsePersistedParentSubsessionLink(entry);
       if (persisted?.spawnedBySessionId !== parentSessionId) continue;
@@ -5319,14 +5320,13 @@ export function projectSessionActivitySubsessions(
   parentSessionId: string,
   cwd: string,
   children: readonly SubsessionSummary[],
-  archived: boolean,
 ): {
   executions: PluginSessionActivityV1Snapshot["relatedExecutions"]["executions"];
   totalCount: number;
   workingCount: number;
   truncated: boolean;
 } {
-  const matching = children.filter((child) => cwdPathsEqual(child.cwd, cwd));
+  const matching = children.filter((child) => isAbsolute(child.cwd) && isAbsolute(cwd) && cwdPathsEqual(child.cwd, cwd));
   const executions = matching.slice(0, 100).map((child) => {
     const status: PluginSessionActivityV1Snapshot["relatedExecutions"]["executions"][number]["status"] = child.status === "error" ? "failed" : child.status;
     return {
@@ -5342,7 +5342,7 @@ export function projectSessionActivitySubsessions(
   return {
     executions,
     totalCount: matching.length,
-    workingCount: archived ? 0 : matching.filter((child) => child.status === "working").length,
+    workingCount: matching.filter((child) => child.status === "working").length,
     truncated: matching.length > executions.length || matching.length !== children.length,
   };
 }

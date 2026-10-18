@@ -128,7 +128,8 @@ function snapshotResult(value: unknown): PluginSessionActivityV1Snapshot {
     }),
   });
   const visibleWorkingCount = executions.filter(({ status: state }) => state === "working").length;
-  if (workingCount < visibleWorkingCount || workingCount > totalCount || totalCount < executions.length) throw invalid();
+  if (workingCount < visibleWorkingCount || workingCount > totalCount || totalCount < executions.length
+    || (!result.relatedExecutions.truncated && workingCount !== visibleWorkingCount)) throw invalid();
   if (runtimeLoaded !== (session.runtime !== "not-hosted")) throw invalid();
   return result;
 }

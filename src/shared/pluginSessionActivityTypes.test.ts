@@ -53,4 +53,18 @@ describe("session activity capability", () => {
     }) });
     await expect(malformed.inspect(selection)).rejects.toThrow("Invalid");
   });
+
+  it("requires exact working counts when the relation projection is complete", async () => {
+    const inconsistent = PI_WEB_HOST_PI_SESSION_ACTIVITY_CAPABILITY.parse({ version: 1, inspect: () => Promise.resolve({
+      ...snapshot(), relatedExecutions: { ...snapshot().relatedExecutions, workingCount: 1, totalCount: 1 },
+    }) });
+    await expect(inconsistent.inspect(selection)).rejects.toThrow("Invalid");
+
+    const truncatedAggregate = PI_WEB_HOST_PI_SESSION_ACTIVITY_CAPABILITY.parse({ version: 1, inspect: () => Promise.resolve({
+      ...snapshot(), relatedExecutions: { ...snapshot().relatedExecutions, truncated: true, workingCount: 1, totalCount: 101 },
+    }) });
+    await expect(truncatedAggregate.inspect(selection)).resolves.toMatchObject({
+      relatedExecutions: { truncated: true, workingCount: 1, totalCount: 101 },
+    });
+  });
 });
