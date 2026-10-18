@@ -226,6 +226,28 @@ describe("Pi session manager gateway", () => {
     expect(await gateway.readBranch(path)).toEqual([appended?.[0], appended?.[1], appended?.[3]]);
   });
 
+  it("streams a bounded active-branch page without changing the transcript file", async () => {
+    const store = join(tempDir, "paged-history");
+    const path = await writeNamedSessionFile(store, "paged.jsonl", { id: "paged-session", cwd });
+    await appendFile(path, [
+      snapshotMessage("u1", "root", "first"),
+      JSON.stringify({ type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: "answer" } }),
+      snapshotMessage("u2", "u1", "abandoned"),
+      JSON.stringify({ type: "message", id: "u2a", parentId: "u2", message: { role: "assistant", content: "ignored" } }),
+      snapshotMessage("u3", "a1", "active"),
+    ].join("\n") + "\n");
+    const before = await readFile(path);
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: store }));
+    if (gateway.readMessagePage === undefined) throw new Error("Expected streamed transcript page reader");
+
+    await expect(gateway.readMessagePage(path, { limit: 1 })).resolves.toEqual({
+      messages: [{ role: "user", content: [{ type: "text", text: "active" }], entryId: "u3" }],
+      start: 2,
+      total: 3,
+    });
+    await expect(readFile(path)).resolves.toEqual(before);
+  });
+
   it("serves repeated snapshots of an unchanged file from the memo", async () => {
     const sharedSessionDir = join(tempDir, "memoized-snapshots");
     const path = await writeNamedSessionFile(sharedSessionDir, "memoized.jsonl", { id: "memoized-session", cwd });

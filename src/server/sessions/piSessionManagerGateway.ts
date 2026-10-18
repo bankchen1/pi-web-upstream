@@ -10,7 +10,9 @@ import { readSessionHeaderSummary, type SessionHeaderReader } from "./sessionFil
 import { tryParseEntry } from "./sessionFileFormat.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 import { TranscriptBranchCache, type TranscriptBranchSnapshot } from "./transcriptBranchCache.js";
+import type { ClientMessagePage } from "../types.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
+import { readSessionHistoryPage } from "./sessionHistoryPageReader.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
 
@@ -129,6 +131,25 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
 
   async readEntries(path: string): Promise<readonly unknown[] | undefined> {
     return (await this.readTranscriptSnapshot(path))?.entries;
+  }
+
+  async readMessagePage(path: string, page?: { before?: number; limit?: number }): Promise<ClientMessagePage | undefined> {
+    const before = await statIfPresent(path);
+    if (before === undefined) return undefined;
+    const file = await open(path, "r");
+    try {
+      const opened = await file.stat();
+      if (transcriptFileSignature(opened) !== transcriptFileSignature(before)) throw new Error("Session transcript changed during history read");
+      const result = await readSessionHistoryPage(file, page);
+      const after = await file.stat();
+      const current = await statIfPresent(path);
+      if (current === undefined || transcriptFileSignature(after) !== transcriptFileSignature(before) || transcriptFileSignature(current) !== transcriptFileSignature(before)) {
+        throw new Error("Session transcript changed during history read");
+      }
+      return result;
+    } finally {
+      await file.close();
+    }
   }
 
   private async readTranscriptSnapshot(path: string): Promise<TranscriptBranchSnapshot | undefined> {

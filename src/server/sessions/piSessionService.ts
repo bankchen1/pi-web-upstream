@@ -415,6 +415,8 @@ export interface PiSessionManagerGateway {
    * bodies or building a full workspace transcript listing.
    */
   resolveSessionFile(cwd: string, sessionId: string): Promise<ResolvedSessionFile | undefined>;
+  /** Read one cold transcript page without retaining all message bodies in memory. */
+  readMessagePage?(path: string, page?: { before?: number; limit?: number }): Promise<ClientMessagePage | undefined>;
   /**
    * Drop any cached listing summary for a session file that was rewritten in
    * place (detach clears the header while keeping the inode): file identity
@@ -2626,6 +2628,8 @@ export class PiSessionService implements SessionRouteService {
       : undefined;
     const path = archived?.archivePath ?? resolved?.path;
     if (path === undefined || (resolved !== undefined && resolved.id !== ref.id)) throw new Error("Session not found");
+    const paged = await this.sessionManager.readMessagePage?.(path, page);
+    if (paged !== undefined) return paged;
     const entries = await this.sessionManager.readEntries?.(path);
     if (entries === undefined) throw new Error("Session transcript is unavailable");
     return pageMessagesAtSafeBoundary(historyMessagesFromEntries(entries), page);

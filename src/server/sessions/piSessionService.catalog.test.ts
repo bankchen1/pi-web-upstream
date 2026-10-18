@@ -82,6 +82,26 @@ describe("read-only session catalog", () => {
     }
   });
 
+  it("uses the streaming page reader for cold history when the gateway provides it", async () => {
+    const gateway = sessionGateway([sessionRecord("cold")]);
+    const page = { messages: [{ role: "user", content: "latest", entryId: "user-1" }], start: 4, total: 5 };
+    const readMessagePage = vi.fn(() => Promise.resolve(page));
+    const readEntries = vi.fn(() => Promise.resolve([]));
+    gateway.readMessagePage = readMessagePage;
+    gateway.readEntries = readEntries;
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: gateway,
+      archiveStore: emptyArchiveStore(), createAgentRuntime: vi.fn(runtimeCreator(fakeRuntime().runtime)),
+    });
+    try {
+      await expect(service.inspectionMessages({ id: "cold", cwd: "/workspace" })).resolves.toEqual(page);
+      expect(readMessagePage).toHaveBeenCalledWith("/sessions/cold.jsonl", undefined);
+      expect(readEntries).not.toHaveBeenCalled();
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("reports already-hosted idle/busy sessions, without assigning runtime state to a cloned file", async () => {
     const fake = fakeRuntime("live");
     const gateway = sessionGateway([]);
