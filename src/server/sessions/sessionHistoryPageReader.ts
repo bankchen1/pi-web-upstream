@@ -24,7 +24,7 @@ interface IndexedEntry {
  * number of entries but intentionally omits message bodies; the file remains
  * untouched and the caller controls path authority before invoking this helper.
  */
-export async function readSessionHistoryPage(file: FileHandle, page?: MessagePageRequest): Promise<ClientMessagePage> {
+export async function readSessionHistoryPage(file: FileHandle, page?: MessagePageRequest, signal?: AbortSignal): Promise<ClientMessagePage> {
   const index = new Map<string, IndexedEntry>();
   let leafId: string | undefined;
   await scanLines(file, (line, offset, length) => {
@@ -40,7 +40,7 @@ export async function readSessionHistoryPage(file: FileHandle, page?: MessagePag
       ...(typeof entry["display"] === "boolean" ? { display: entry["display"] } : {}),
     });
     leafId = id;
-  });
+  }, signal);
 
   const branch: IndexedEntry[] = [];
   const visited = new Set<string>();
@@ -76,9 +76,13 @@ export async function readSessionHistoryPage(file: FileHandle, page?: MessagePag
 
   const records = new Map<string, Record<string, unknown>>();
   const selectedBranch = branch.slice(first, last + 1);
+  const selectedBytes = selectedBranch.reduce((totalBytes, entry) => totalBytes + entry.length, 0)
+    + (contextIndex === undefined ? 0 : branch[contextIndex]?.length ?? 0);
+  if (page?.maxBytes !== undefined && selectedBytes > page.maxBytes) throw new Error(`Session history page exceeds ${String(page.maxBytes)} bytes; request a smaller or partial page`);
   const contextEntry = contextIndex === undefined ? undefined : branch[contextIndex];
   const readEntries = contextEntry === undefined ? selectedBranch : [contextEntry, ...selectedBranch];
   for (const entry of readEntries) {
+    signal?.throwIfAborted();
     const line = Buffer.alloc(entry.length);
     const { bytesRead } = await file.read(line, 0, entry.length, entry.offset);
     if (bytesRead !== entry.length) throw new Error("Session transcript changed during history read");
@@ -100,7 +104,7 @@ function visibleRole(entry: IndexedEntry): string | undefined {
   return undefined;
 }
 
-async function scanLines(file: FileHandle, visit: (line: Buffer, offset: number, length: number) => void): Promise<void> {
+async function scanLines(file: FileHandle, visit: (line: Buffer, offset: number, length: number) => void, signal?: AbortSignal): Promise<void> {
   const chunk = Buffer.alloc(READ_CHUNK_BYTES);
   let position = 0;
   let lineOffset = 0;
@@ -108,6 +112,7 @@ async function scanLines(file: FileHandle, visit: (line: Buffer, offset: number,
   let pendingLength = 0;
 
   for (;;) {
+    signal?.throwIfAborted();
     const { bytesRead } = await file.read(chunk, 0, chunk.length, position);
     if (bytesRead === 0) break;
     position += bytesRead;
@@ -117,7 +122,7 @@ async function scanLines(file: FileHandle, visit: (line: Buffer, offset: number,
       if (newline < 0 || newline >= bytesRead) {
         const tail = chunk.subarray(start, bytesRead);
         if (tail.length > 0) {
-          pending.push(tail);
+          pending.push(Buffer.from(tail));
           pendingLength += tail.length;
           assertEntryLength(pendingLength);
         }
@@ -127,6 +132,7 @@ async function scanLines(file: FileHandle, visit: (line: Buffer, offset: number,
       const length = pendingLength + fragment.length;
       assertEntryLength(length);
       const line = pending.length === 0 ? fragment : Buffer.concat([...pending, fragment], length);
+      signal?.throwIfAborted();
       visit(line, lineOffset, length);
       lineOffset += length + 1;
       pending = [];

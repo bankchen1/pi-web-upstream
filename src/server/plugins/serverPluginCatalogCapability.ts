@@ -21,7 +21,7 @@ export interface CreateServerPluginCatalogCapabilityOptions {
     /** Read disk/archive records and already-hosted runtimes only; never reconcile or open a runtime. */
     readonly listCatalogSessions: (cwd: string, signal?: AbortSignal) => Promise<readonly PluginSessionSnapshot[]>;
     /** Read bounded history without opening a cold runtime. */
-    readonly inspectionMessages: (ref: { readonly id: string; readonly cwd: string }, page?: PluginSessionHistoryPageRequest) => Promise<PluginSessionHistoryPage>;
+    readonly inspectionMessages: (ref: { readonly id: string; readonly cwd: string }, page?: PluginSessionHistoryPageRequest, signal?: AbortSignal) => Promise<PluginSessionHistoryPage>;
   };
 }
 
@@ -99,7 +99,7 @@ export function createServerPluginCatalogCapabilityFactory(
         if (!rows.some((row) => row.id === selection.sessionId && absolutePath(row.cwd) === selected.path)) {
           throw new Error("Catalog selected session is stale or unavailable");
         }
-        const result = await options.sessions.inspectionMessages({ id: selection.sessionId, cwd: selected.path }, page);
+        const result = await options.sessions.inspectionMessages({ id: selection.sessionId, cwd: selected.path }, page, signal);
         assertActive(signal);
         return result;
       }

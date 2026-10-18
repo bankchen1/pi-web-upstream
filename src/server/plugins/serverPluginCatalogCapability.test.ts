@@ -70,7 +70,7 @@ describe("server plugin catalog capability", () => {
     await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { before: 4, limit: 10 })).resolves.toEqual({
       messages: [{ role: "user", content: "cold:10" }], start: 0, total: 1,
     });
-    expect(f.sessions.inspectionMessages).toHaveBeenCalledWith({ id: "cold", cwd: repositoryPath }, { before: 4, limit: 10 });
+    expect(f.sessions.inspectionMessages).toHaveBeenCalledWith({ id: "cold", cwd: repositoryPath }, { before: 4, limit: 10 }, expect.any(AbortSignal));
     await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "missing" })).rejects.toThrow("session is stale or unavailable");
     await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { limit: 101 })).rejects.toThrow("Invalid PI WEB host catalog capability v1 data");
   });

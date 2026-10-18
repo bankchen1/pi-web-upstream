@@ -416,7 +416,7 @@ export interface PiSessionManagerGateway {
    */
   resolveSessionFile(cwd: string, sessionId: string): Promise<ResolvedSessionFile | undefined>;
   /** Read one cold transcript page without retaining all message bodies in memory. */
-  readMessagePage?(path: string, page?: { before?: number; limit?: number }): Promise<ClientMessagePage | undefined>;
+  readMessagePage?(path: string, page?: { before?: number; limit?: number; allowPartialTurn?: boolean; maxMessages?: number; maxBytes?: number }, signal?: AbortSignal): Promise<ClientMessagePage | undefined>;
   /**
    * Drop any cached listing summary for a session file that was rewritten in
    * place (detach clears the header while keeping the inode): file identity
@@ -2614,12 +2614,18 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /** Read durable history without opening a cold runtime or changing archive state. */
-  async inspectionMessages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
+  async inspectionMessages(ref: PiSessionRef, page?: { before?: number; limit?: number; allowPartialTurn?: boolean }, signal?: AbortSignal): Promise<ClientMessagePage> {
+    signal?.throwIfAborted();
+    const boundedPage = { limit: 100, ...page, maxMessages: 500, maxBytes: 8 * 1024 * 1024 };
     const hosted = this.activeForRef(ref)?.runtime.session ?? this.startupSessionForRef(ref);
     if (hosted !== undefined) {
       const branch = this.hasActiveWork(hosted) ? hosted.sessionManager.getBranch() : await this.readableSessionBranch(ref, hosted);
-      const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(branch), page);
-      return { ...result, messages: result.messages.map((message) => this.browserTranscriptMessage(hosted, message)) };
+      signal?.throwIfAborted();
+      const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(branch), boundedPage);
+      const messages = result.messages.map((message) => projectBrowserMessage(this.browserTranscriptMessage(hosted, message)));
+      assertInspectionPageBudget(messages, boundedPage.maxBytes);
+      signal?.throwIfAborted();
+      return { ...result, messages };
     }
 
     const archived = await this.getArchived(ref);
@@ -2628,11 +2634,21 @@ export class PiSessionService implements SessionRouteService {
       : undefined;
     const path = archived?.archivePath ?? resolved?.path;
     if (path === undefined || (resolved !== undefined && resolved.id !== ref.id)) throw new Error("Session not found");
-    const paged = await this.sessionManager.readMessagePage?.(path, page);
-    if (paged !== undefined) return paged;
+    const paged = await this.sessionManager.readMessagePage?.(path, boundedPage, signal);
+    if (paged !== undefined) {
+      const messages = paged.messages.map((message) => projectBrowserMessage(message));
+      assertInspectionPageBudget(messages, boundedPage.maxBytes);
+      signal?.throwIfAborted();
+      return { ...paged, messages };
+    }
+    signal?.throwIfAborted();
     const entries = await this.sessionManager.readEntries?.(path);
+    signal?.throwIfAborted();
     if (entries === undefined) throw new Error("Session transcript is unavailable");
-    return pageMessagesAtSafeBoundary(historyMessagesFromEntries(entries), page);
+    const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(entries), boundedPage);
+    const messages = result.messages.map((message) => projectBrowserMessage(message));
+    assertInspectionPageBudget(messages, boundedPage.maxBytes);
+    return { ...result, messages };
   }
 
   async media(ref: PiSessionRef, mediaId: string): Promise<SessionMedia | undefined> {
@@ -5877,6 +5893,15 @@ function stringifyToolResult(result: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function assertInspectionPageBudget(messages: readonly unknown[], maxBytes: number): void {
+  let size = 0;
+  for (const message of messages) {
+    if (message === undefined) continue;
+    size += Buffer.byteLength(JSON.stringify(message));
+    if (size > maxBytes) throw new Error(`Session history page exceeds ${String(maxBytes)} bytes; request a smaller or partial page`);
+  }
 }
 
 function getProperty(value: unknown, key: string): unknown {

@@ -33,7 +33,7 @@ export interface PluginWorkspaceSelection {
 export interface PluginSessionSelection extends PluginWorkspaceSelection {
   readonly sessionId: string;
 }
-export interface PluginSessionHistoryPageRequest { readonly before?: number; readonly limit?: number }
+export interface PluginSessionHistoryPageRequest { readonly before?: number; readonly limit?: number; readonly allowPartialTurn?: boolean }
 export interface PluginSessionHistoryPage {
   readonly messages: readonly unknown[];
   readonly start: number;
@@ -138,10 +138,12 @@ function methods(value: unknown) {
 }
 function snapshotHistoryPage(value: PluginSessionHistoryPageRequest): PluginSessionHistoryPageRequest {
   const row = record(value);
-  if (Reflect.ownKeys(row).some((key) => typeof key !== "string" || (key !== "before" && key !== "limit"))) throw invalid();
-  const before = boundedInteger(row["before"], 0, 1_000_000);
+  if (Reflect.ownKeys(row).some((key) => typeof key !== "string" || (key !== "before" && key !== "limit" && key !== "allowPartialTurn"))) throw invalid();
+  const before = boundedInteger(row["before"], 0, Number.MAX_SAFE_INTEGER);
   const limit = boundedInteger(row["limit"], 1, 100) ?? DEFAULT_HISTORY_PAGE_SIZE;
-  return Object.freeze({ ...(before === undefined ? {} : { before }), limit });
+  const allowPartialTurn = row["allowPartialTurn"];
+  if (allowPartialTurn !== undefined && typeof allowPartialTurn !== "boolean") throw invalid();
+  return Object.freeze({ ...(before === undefined ? {} : { before }), limit, ...(allowPartialTurn === true ? { allowPartialTurn } : {}) });
 }
 function boundedInteger(value: unknown, min: number, max: number): number | undefined {
   if (value === undefined) return undefined;

@@ -133,14 +133,14 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     return (await this.readTranscriptSnapshot(path))?.entries;
   }
 
-  async readMessagePage(path: string, page?: { before?: number; limit?: number }): Promise<ClientMessagePage | undefined> {
+  async readMessagePage(path: string, page?: import("./messagePaging.js").MessagePageRequest, signal?: AbortSignal): Promise<ClientMessagePage | undefined> {
     const before = await statIfPresent(path);
     if (before === undefined) return undefined;
     const file = await open(path, "r");
     try {
       const opened = await file.stat();
       if (transcriptFileSignature(opened) !== transcriptFileSignature(before)) throw new Error("Session transcript changed during history read");
-      const result = await readSessionHistoryPage(file, page);
+      const result = await readSessionHistoryPage(file, page, signal);
       const after = await file.stat();
       const current = await statIfPresent(path);
       if (current === undefined || transcriptFileSignature(after) !== transcriptFileSignature(before) || transcriptFileSignature(current) !== transcriptFileSignature(before)) {
@@ -230,7 +230,7 @@ function transcriptFileIdentity(file: Stats): string {
 }
 /** The signature a memoized snapshot is validated against: identity, size, and mtime. */
 function transcriptFileSignature(file: Stats): string {
-  return `${transcriptFileIdentity(file)}:${String(file.size)}:${String(file.mtimeMs)}`;
+  return `${transcriptFileIdentity(file)}:${String(file.size)}:${String(file.mtimeMs)}:${String(file.ctimeMs)}`;
 }
 
 /**

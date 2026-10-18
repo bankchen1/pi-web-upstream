@@ -67,6 +67,24 @@ describe("streamed session history pages", () => {
     await expect(readSessionHistoryPage(file)).rejects.toThrow("exceeds 16777216 bytes");
     await file.close();
   });
+
+  it("aborts a cold transcript scan when its caller cancels", async () => {
+    const path = await transcript([{ type: "message", id: "u1", message: { role: "user", content: "hello" } }]);
+    const file = await open(path, "r");
+    await expect(readSessionHistoryPage(file, undefined, AbortSignal.abort(new Error("cancelled")))).rejects.toThrow("cancelled");
+    await file.close();
+  });
+
+  it("keeps selected transcript reads under the byte response budget", async () => {
+    const entries = Array.from({ length: 3 }, (_, index) => ({
+      type: "message", id: `m${String(index)}`, ...(index === 0 ? {} : { parentId: `m${String(index - 1)}` }),
+      message: { role: index === 0 ? "user" : "assistant", content: "x".repeat(3 * 1024 * 1024) },
+    }));
+    const path = await transcript(entries);
+    const file = await open(path, "r");
+    await expect(readSessionHistoryPage(file, { limit: 3, maxBytes: 8 * 1024 * 1024 })).rejects.toThrow("exceeds 8388608 bytes");
+    await file.close();
+  });
 });
 
 async function transcript(entries: readonly unknown[]): Promise<string> {

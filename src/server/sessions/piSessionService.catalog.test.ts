@@ -95,8 +95,45 @@ describe("read-only session catalog", () => {
     });
     try {
       await expect(service.inspectionMessages({ id: "cold", cwd: "/workspace" })).resolves.toEqual(page);
-      expect(readMessagePage).toHaveBeenCalledWith("/sessions/cold.jsonl", undefined);
+      expect(readMessagePage).toHaveBeenCalledWith("/sessions/cold.jsonl", { limit: 100, maxMessages: 500, maxBytes: 8 * 1024 * 1024 }, undefined);
       expect(readEntries).not.toHaveBeenCalled();
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("applies the bounded response budget to already-hosted session history", async () => {
+    const fake = fakeRuntime("live");
+    fake.session.sessionManager.getBranch = () => [{
+      type: "message", id: "large-user", message: { role: "user", content: "x".repeat(9 * 1024 * 1024) },
+    }];
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: sessionGateway([]),
+      archiveStore: emptyArchiveStore(), createAgentRuntime: runtimeCreator(fake.runtime),
+    });
+    try {
+      await service.start("/workspace");
+      await expect(service.inspectionMessages({ id: "live", cwd: "/workspace" }, { limit: 1 })).rejects.toThrow("exceeds 8388608 bytes");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("uses a bounded default page for hosted inspection without affecting browser paging", async () => {
+    const fake = fakeRuntime("live");
+    fake.session.sessionManager.getBranch = () => Array.from({ length: 501 }, (_, index) => ({
+      type: "message", id: `user-${String(index)}`, ...(index === 0 ? {} : { parentId: `user-${String(index - 1)}` }),
+      message: { role: "user", content: `message ${String(index)}` },
+    }));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: sessionGateway([]),
+      archiveStore: emptyArchiveStore(), createAgentRuntime: runtimeCreator(fake.runtime),
+    });
+    try {
+      await service.start("/workspace");
+      const result = await service.inspectionMessages({ id: "live", cwd: "/workspace" });
+      expect(result).toMatchObject({ start: 401, total: 501 });
+      expect(result.messages).toHaveLength(100);
     } finally {
       await service.dispose();
     }
