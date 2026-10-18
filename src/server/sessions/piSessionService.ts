@@ -2607,6 +2607,26 @@ export class PiSessionService implements SessionRouteService {
     return { ...result, messages: result.messages.map((message) => this.browserTranscriptMessage(session, message)) };
   }
 
+  /** Read durable history without opening a cold runtime or changing archive state. */
+  async inspectionMessages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
+    const hosted = this.activeForRef(ref)?.runtime.session ?? this.startupSessionForRef(ref);
+    if (hosted !== undefined) {
+      const branch = this.hasActiveWork(hosted) ? hosted.sessionManager.getBranch() : await this.readableSessionBranch(ref, hosted);
+      const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(branch), page);
+      return { ...result, messages: result.messages.map((message) => this.browserTranscriptMessage(hosted, message)) };
+    }
+
+    const archived = await this.getArchived(ref);
+    const resolved = archived?.archivePath === undefined
+      ? await this.sessionManager.resolveSessionFile(ref.cwd, ref.id)
+      : undefined;
+    const path = archived?.archivePath ?? resolved?.path;
+    if (path === undefined || (resolved !== undefined && resolved.id !== ref.id)) throw new Error("Session not found");
+    const entries = await this.sessionManager.readEntries?.(path);
+    if (entries === undefined) throw new Error("Session transcript is unavailable");
+    return pageMessagesAtSafeBoundary(historyMessagesFromEntries(entries), page);
+  }
+
   async media(ref: PiSessionRef, mediaId: string): Promise<SessionMedia | undefined> {
     if (!isSessionMediaId(mediaId)) throw new Error("Invalid media id");
     const index = this.events.mediaIndex;

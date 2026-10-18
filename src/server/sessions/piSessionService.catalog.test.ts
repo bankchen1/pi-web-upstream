@@ -21,6 +21,39 @@ describe("read-only session catalog", () => {
     }
   });
 
+  it("reads paged cold history without opening a runtime and preserves turn boundaries", async () => {
+    const entries = [
+      { type: "message", id: "u1", message: { role: "user", content: "first" } },
+      { type: "message", id: "a1", message: { role: "assistant", content: "answer" } },
+      { type: "message", id: "u2", message: { role: "user", content: "second" } },
+    ];
+    const gateway = sessionGateway([sessionRecord("cold")]);
+    const readEntries = vi.fn(() => Promise.resolve(entries));
+    gateway.readEntries = readEntries;
+    const open = vi.spyOn(gateway, "open");
+    const createRuntime = vi.fn(runtimeCreator(fakeRuntime().runtime));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: gateway,
+      archiveStore: emptyArchiveStore(), createAgentRuntime: createRuntime,
+    });
+    try {
+      await expect(service.inspectionMessages({ id: "cold", cwd: "/workspace" }, { before: 2, limit: 1 })).resolves.toEqual({
+        messages: [
+          { role: "user", content: "first", entryId: "u1" },
+          { role: "assistant", content: "answer", entryId: "a1" },
+        ],
+        start: 0,
+        total: 3,
+      });
+      expect(readEntries).toHaveBeenCalledWith("/sessions/cold.jsonl");
+      expect(open).not.toHaveBeenCalled();
+      expect(createRuntime).not.toHaveBeenCalled();
+      expect(service.activeCount()).toBe(0);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("reports already-hosted idle/busy sessions, without assigning runtime state to a cloned file", async () => {
     const fake = fakeRuntime("live");
     const gateway = sessionGateway([]);
