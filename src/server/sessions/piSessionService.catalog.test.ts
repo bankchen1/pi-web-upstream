@@ -3,6 +3,69 @@ import { PiSessionService } from "./piSessionService.js";
 import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
 
 describe("read-only session catalog", () => {
+  it("inspects cold and archived session activity without creating a Pi runtime", async () => {
+    const parent = sessionRecord("cold");
+    const gateway = sessionGateway([parent, sessionRecord("archived")]);
+    const open = vi.spyOn(gateway, "open");
+    const readMessagePage = vi.fn((path: string) => Promise.resolve({ messages: [], start: 0, total: path.includes("archive") ? 7 : 4 }));
+    gateway.readMessagePage = readMessagePage;
+    const archiveStore = {
+      ...emptyArchiveStore(),
+      list: () => Promise.resolve([{
+        sessionId: "archived", cwd: "/workspace", archivedAt: "2026-10-17T12:00:00.000Z",
+        originalPath: "/sessions/archived.jsonl", archivePath: "/archive/archived.jsonl",
+      }]),
+      get: (id: string) => Promise.resolve(id === "archived" ? {
+        sessionId: "archived", cwd: "/workspace", archivedAt: "2026-10-17T12:00:00.000Z",
+        originalPath: "/sessions/archived.jsonl", archivePath: "/archive/archived.jsonl",
+      } : undefined),
+    };
+    const createRuntime = vi.fn(runtimeCreator(fakeRuntime().runtime));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: gateway,
+      archiveStore, createAgentRuntime: createRuntime,
+    });
+    try {
+      await expect(service.inspectSessionActivity("/workspace", "cold")).resolves.toMatchObject({
+        session: { id: "cold", runtime: "not-hosted" }, lifecycle: "active", runtimeLoaded: false, activity: "idle",
+        status: { messageCount: 4, pendingMessageCount: null, queueState: { available: false }, telemetry: { available: false } },
+        relatedExecutions: { supportedKinds: ["subsession"], unsupportedKinds: ["background-agent", "terminal", "process"] },
+      });
+      await expect(service.inspectSessionActivity("/workspace", "archived")).resolves.toMatchObject({
+        session: { id: "archived", archived: true }, lifecycle: "archived", runtimeLoaded: false, activity: "idle",
+        status: { messageCount: 7, isStreaming: null, telemetry: { available: false } },
+      });
+      expect(readMessagePage).toHaveBeenCalledWith("/sessions/cold.jsonl", { limit: 1, maxMessages: 500, maxBytes: 8 * 1024 * 1024 }, undefined);
+      expect(readMessagePage).toHaveBeenCalledWith("/archive/archived.jsonl", { limit: 1, maxMessages: 500, maxBytes: 8 * 1024 * 1024 }, undefined);
+      expect(createRuntime).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(service.activeCount()).toBe(0);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("reads current runtime activity without opening another runtime", async () => {
+    const fake = fakeRuntime("live", { isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 2 });
+    const createRuntime = vi.fn(runtimeCreator(fake.runtime));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: sessionGateway([]),
+      archiveStore: emptyArchiveStore(), createAgentRuntime: createRuntime,
+    });
+    try {
+      await service.start("/workspace");
+      const snapshot = await service.inspectSessionActivity("/workspace", "live");
+      expect(snapshot).toMatchObject({
+        session: { id: "live", runtime: "busy" }, lifecycle: "active", runtimeLoaded: true, activity: "working",
+        status: { isStreaming: true, isCompacting: false, isBashRunning: false, pendingMessageCount: 2, queueState: { available: true }, telemetry: { available: true } },
+      });
+      expect(createRuntime).toHaveBeenCalledTimes(1);
+      expect(service.activeCount()).toBe(1);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("projects same-workspace parent IDs and archive timestamps without exposing session paths", async () => {
     const parent = sessionRecord("parent");
     const child = { ...sessionRecord("child"), parentSessionPath: parent.path };

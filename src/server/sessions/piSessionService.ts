@@ -52,6 +52,7 @@ import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInp
 import { findArchiveCandidateByExactId, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
 import type { PluginSessionSnapshot } from "../../shared/pluginCatalogTypes.js";
+import type { PluginSessionActivityV1Snapshot } from "../../shared/pluginSessionActivityTypes.js";
 import type { PiWebHostPiSessionConnection } from "../../server-plugin-api.js";
 import { PiSessionEventConnections } from "./piSessionEventConnections.js";
 import { fallbackSessionName, generateShortSessionName, requireInitialSessionName } from "./sessionNameGenerator.js";
@@ -1589,6 +1590,106 @@ export class PiSessionService implements SessionRouteService {
         ...(row.archivedAt === undefined ? {} : { archivedAt: row.archivedAt }),
         runtime: runtime === undefined ? "not-hosted" : this.hasActiveWork(runtime) ? "busy" : "idle",
       } satisfies PluginSessionSnapshot);
+    });
+  }
+
+  /** Read activity from catalog state and an already hosted runtime; never opens a cold runtime. */
+  async inspectSessionActivity(cwd: string, sessionId: string, signal?: AbortSignal): Promise<PluginSessionActivityV1Snapshot> {
+    signal?.throwIfAborted();
+    const rows = await this.listCatalogSessions(cwd, signal);
+    const matches = rows.filter((row) => row.id === sessionId);
+    if (matches.length !== 1) throw new Error(matches.length === 0 ? "Session not found" : "Session id is ambiguous in the selected workspace");
+    const sessionSnapshot = matches.at(0);
+    if (sessionSnapshot === undefined) throw new Error("Session not found");
+    const ref = { id: sessionId, cwd };
+    const runtime = this.activeForRef(ref)?.runtime.session;
+    const startup = runtime === undefined ? this.startupSessionForRef(ref) : undefined;
+    const hosted = runtime ?? startup;
+    const archived = sessionSnapshot.archived;
+    const lifecycle = archived ? "archived" : startup === undefined ? "active" : "starting";
+    const relatedRows: PluginSessionActivityV1Snapshot["relatedExecutions"]["executions"][number][] = [];
+    let truncated = false;
+    const archive = archived ? await this.getArchived(ref) : undefined;
+    const file = archive?.archivePath ?? (await this.sessionManager.resolveSessionFile(cwd, sessionId))?.path
+      ?? (hosted === undefined ? undefined : hosted.sessionFile);
+    if (file !== undefined) {
+      // listSubsessions verifies persisted parent links against the exact child
+      // file. It may populate an in-memory relation cache, but never creates a
+      // PiAgent runtime or appends transcript entries.
+      const children = await this.listSubsessions(sessionId, file);
+      for (const child of children) {
+        if (child.cwd !== cwd) { truncated = true; continue; }
+        if (relatedRows.length >= 100) { truncated = true; continue; }
+        const status = child.status === "error" ? "failed" : child.status;
+        relatedRows.push({
+          id: `subsession:${child.sessionId}`,
+          kind: "subsession",
+          parentSessionId: sessionId,
+          sessionId: child.sessionId,
+          status,
+          canStop: status === "working",
+          canOpenSession: true,
+        });
+      }
+    }
+    signal?.throwIfAborted();
+
+    const relatedWorking = archived ? 0 : relatedRows.filter((execution) => execution.status === "working").length;
+    let status: PluginSessionActivityV1Snapshot["status"];
+    let activity: PluginSessionActivityV1Snapshot["activity"];
+    if (hosted === undefined) {
+      const history = await this.inspectionMessages(ref, { limit: 1 }, signal);
+      status = {
+        persisted: file !== undefined,
+        isStreaming: null,
+        isCompacting: null,
+        isBashRunning: null,
+        pendingMessageCount: null,
+        messageCount: history.total,
+        queueState: { available: false, reason: "runtime_not_loaded" },
+        telemetry: { available: false, reason: "runtime_not_loaded" },
+      };
+      activity = !archived && relatedWorking > 0 ? "working" : "idle";
+    } else {
+      const activeWork = !archived && this.hasActiveWork(hosted);
+      const steeringCount = hosted.getSteeringMessages().length;
+      const followUpCount = hosted.getFollowUpMessages().length;
+      const compactionFollowUpCount = this.compactionQueuedMessages(sessionId).length;
+      const stats = hosted.getSessionStats();
+      const contextUsage = hosted.getContextUsage();
+      status = {
+        persisted: sessionFileExists(hosted.sessionFile),
+        isStreaming: hosted.isStreaming,
+        isCompacting: hosted.isCompacting,
+        isBashRunning: hosted.isBashRunning,
+        pendingMessageCount: this.pendingMessageCount(hosted),
+        messageCount: transcriptMessageCount(hosted.sessionManager.getBranch()),
+        queueState: { available: true, steeringCount, followUpCount, compactionFollowUpCount },
+        telemetry: {
+          available: true,
+          tokens: stats.tokens,
+          cost: stats.cost,
+          ...(contextUsage === undefined ? {} : { contextUsage }),
+        },
+      };
+      activity = archived ? "idle" : activeWork || relatedWorking > 0 ? "working"
+        : steeringCount + followUpCount + compactionFollowUpCount > 0 ? "waiting" : "idle";
+    }
+    signal?.throwIfAborted();
+    return Object.freeze({
+      session: sessionSnapshot,
+      lifecycle,
+      runtimeLoaded: hosted !== undefined,
+      activity,
+      status,
+      relatedExecutions: {
+        supportedKinds: ["subsession"] as const,
+        unsupportedKinds: ["background-agent", "terminal", "process"] as const,
+        truncated,
+        executions: relatedRows,
+        workingCount: relatedRows.filter(({ status: state }) => state === "working").length,
+        totalCount: relatedRows.length,
+      },
     });
   }
 
