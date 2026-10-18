@@ -3,6 +3,34 @@ import { PiSessionService } from "./piSessionService.js";
 import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
 
 describe("read-only session catalog", () => {
+  it("projects same-workspace parent IDs and archive timestamps without exposing session paths", async () => {
+    const parent = sessionRecord("parent");
+    const child = { ...sessionRecord("child"), parentSessionPath: parent.path };
+    const outsideParent = { ...sessionRecord("outside-child"), parentSessionPath: "/other-workspace/parent.jsonl" };
+    const gateway = sessionGateway([parent, child, outsideParent]);
+    const archiveStore = {
+      ...emptyArchiveStore(),
+      list: () => Promise.resolve([{
+        sessionId: "parent", cwd: "/workspace", archivedAt: "2026-10-17T12:00:00.000Z",
+        originalPath: parent.path,
+      }]),
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: gateway,
+      archiveStore, createAgentRuntime: vi.fn(runtimeCreator(fakeRuntime().runtime)),
+    });
+    try {
+      const rows = await service.listCatalogSessions("/workspace");
+      expect(rows.find(({ id }) => id === "parent")).toMatchObject({ archived: true, archivedAt: "2026-10-17T12:00:00.000Z" });
+      expect(rows.find(({ id }) => id === "child")).toMatchObject({ parentSessionId: "parent" });
+      expect(rows.find(({ id }) => id === "outside-child")).not.toHaveProperty("parentSessionId");
+      expect(JSON.stringify(rows)).not.toContain("/sessions/");
+      expect(JSON.stringify(rows)).not.toContain("parentSessionPath");
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("lists cold conversations without opening a runtime or leaking transcript/file fields", async () => {
     const gateway = sessionGateway([{ ...sessionRecord("cold"), firstMessage: "private text" }]);
     const open = vi.spyOn(gateway, "open");

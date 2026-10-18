@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
@@ -1573,14 +1573,18 @@ export class PiSessionService implements SessionRouteService {
       const row = clientSessionFromArchivedRecord(record, entriesById.get(record.sessionId));
       if (row !== undefined) rows.set(row.id, row);
     }
+    const sessionIdsByPath = new Map([...rows.values()].map((row) => [resolve(row.path), row.id]));
     return [...rows.values()].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified)).map((row) => {
       const runtime = runtimes.get(row.id);
+      const parentSessionId = row.parentSessionPath === undefined ? undefined : sessionIdsByPath.get(resolve(row.parentSessionPath));
       return Object.freeze({
         id: row.id,
         cwd: row.cwd,
         ...(row.name === undefined ? {} : { name: row.name }),
         ...(row.metadata === undefined ? {} : { metadata: structuredClone(row.metadata) }),
         archived: row.archived === true,
+        ...(parentSessionId === undefined ? {} : { parentSessionId }),
+        ...(row.archivedAt === undefined ? {} : { archivedAt: row.archivedAt }),
         runtime: runtime === undefined ? "not-hosted" : this.hasActiveWork(runtime) ? "busy" : "idle",
       } satisfies PluginSessionSnapshot);
     });
