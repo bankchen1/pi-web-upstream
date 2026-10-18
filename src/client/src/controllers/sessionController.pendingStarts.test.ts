@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initialAppState } from "../appState";
 import { browserErrorScopeKey, visibleBrowserErrors, workspaceBrowserErrorScope } from "../browserErrors";
 import { isCachedNewSessionInfo, loadCachedNewSessions } from "../cachedNewSessions";
@@ -44,6 +44,46 @@ describe("SessionController pending starts", () => {
 
     expect(startSelection).toEqual({ provider: "openai", modelId: "gpt-5", thinkingLevel: "high" });
     expect(state.selectedSession?.id).toBe("started-session");
+  });
+
+  it("does not inherit model defaults from a selected session in another workspace", async () => {
+    const started: SessionInfo = { ...oldSession, id: "started-session", cwd: "/other-repo", path: "/tmp/started-session.jsonl" };
+    const getSessionDefaults = vi.fn(() => Promise.resolve({ defaultProvider: "anthropic", defaultModel: "claude-sonnet-4-5" }));
+    const modelCatalog = vi.fn(() => Promise.resolve({ models: [{ provider: "openai", id: "gpt-5", enabled: true }] }));
+    let state: AppState = {
+      ...initialAppState(),
+      selectedWorkspace: { ...workspace, path: "/other-repo" },
+      selectedSession: oldSession,
+      sessions: [oldSession],
+      sessionStatuses: {
+        [oldSession.id]: { ...status(oldSession.id), model: { provider: "openai", id: "gpt-5" }, thinkingLevel: "high" },
+      },
+    };
+    let startSelection: { provider?: string; modelId?: string; thinkingLevel?: string } | undefined;
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      {
+        api: {
+          ...defaultApi,
+          getSessionDefaults,
+          modelCatalog,
+          startSession: (_cwd, _machineId, _startupToken, selection) => {
+            startSelection = selection;
+            return Promise.resolve(started);
+          },
+        },
+        socket: new FakeSocket(),
+      },
+    );
+
+    await controller.startSession();
+
+    expect(getSessionDefaults).not.toHaveBeenCalled();
+    expect(modelCatalog).not.toHaveBeenCalled();
+    expect(startSelection).toEqual({});
   });
 
   it("prefers a valid saved model pin and its new-session thinking default", async () => {

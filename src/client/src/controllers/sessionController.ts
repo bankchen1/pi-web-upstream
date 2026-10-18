@@ -278,10 +278,13 @@ export class SessionController {
     if (!workspace) return;
     const machineId = selectedMachineId(this.getState());
     const selectedSession = this.getState().selectedSession;
-    const defaultsRequest = selectedSession === undefined || isClientPendingStartSessionInfo(selectedSession)
+    const selectedSessionMatchesWorkspace = selectedSession !== undefined
+      && !isClientPendingStartSessionInfo(selectedSession)
+      && selectedSession.cwd === workspace.path;
+    const defaultsRequest = !selectedSessionMatchesWorkspace
       ? undefined
       : this.getSessionDefaults();
-    const inheritedStatus = selectedSession === undefined || isClientPendingStartSessionInfo(selectedSession)
+    const inheritedStatus = !selectedSessionMatchesWorkspace
       ? undefined
       : this.getState().sessionStatuses[selectedSession.id];
     const pendingUrlPublished = options?.updateUrl !== false;
@@ -306,7 +309,7 @@ export class SessionController {
       let selectedThinkingLevel = pinnedModel === undefined
         ? inheritedStatus?.thinkingLevel ?? (inheritedModel === undefined ? undefined : DEFAULT_NEW_SELECTION_THINKING_LEVEL)
         : DEFAULT_NEW_SELECTION_THINKING_LEVEL;
-      if (selectedSession !== undefined && !isClientPendingStartSessionInfo(selectedSession) && (pinnedModel !== undefined || inheritedModel !== undefined)) {
+      if (selectedSessionMatchesWorkspace && (pinnedModel !== undefined || inheritedModel !== undefined)) {
         try {
           const availableModels = (await this.api.modelCatalog(selectedSession, machineId)).models;
           const isAvailable = (candidate: typeof pinnedModel) => candidate !== undefined
