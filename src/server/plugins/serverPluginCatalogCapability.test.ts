@@ -75,6 +75,18 @@ describe("server plugin catalog capability", () => {
     await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { limit: 101 })).rejects.toThrow("Invalid PI WEB host catalog capability v1 data");
   });
 
+  it("fails closed when a workspace contains duplicate session IDs", async () => {
+    const f = fixture();
+    f.sessions.listCatalogSessions.mockResolvedValue([
+      { id: "duplicate", cwd: repositoryPath, archived: false, runtime: "not-hosted", name: "First file" },
+      { id: "duplicate", cwd: repositoryPath, archived: true, runtime: "not-hosted", name: "Second file" },
+    ]);
+
+    await expect(f.catalog.sessions.get({ ...selection, sessionId: "duplicate" })).rejects.toThrow("session is ambiguous");
+    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "duplicate" })).rejects.toThrow("session is ambiguous");
+    expect(f.sessions.inspectionMessages).not.toHaveBeenCalled();
+  });
+
   it("re-resolves authority and rejects stale workspaces, missing projects and sessions", async () => {
     const f = fixture();
     await expect(f.catalog.sessions.get({ ...selection, sessionId: "missing" })).rejects.toThrow("session is stale or unavailable");

@@ -96,7 +96,7 @@ export function createServerPluginCatalogCapabilityFactory(
         const rows = await options.sessions.listCatalogSessions(selected.path, signal);
         assertActive(signal);
         if (rows.some((row) => absolutePath(row.cwd) !== selected.path)) throw new Error("Catalog session is outside selected workspace");
-        if (!rows.some((row) => row.id === selection.sessionId && absolutePath(row.cwd) === selected.path)) {
+        if (uniqueSession(rows, selection.sessionId) === undefined) {
           throw new Error("Catalog selected session is stale or unavailable");
         }
         const result = await options.sessions.inspectionMessages({ id: selection.sessionId, cwd: selected.path }, page, signal);
@@ -120,7 +120,7 @@ export function createServerPluginCatalogCapabilityFactory(
         sessions: {
           list: (selection: PluginWorkspaceSelection, requested?: PluginCatalogReadOptions) => read(requested, (signal) => sessions(selection, signal)),
           get: (selection: PluginSessionSelection, requested?: PluginCatalogReadOptions) => read(requested, async (signal) => {
-            const result = (await sessions({ projectId: selection.projectId, workspaceId: selection.workspaceId }, signal)).find(({ id }) => id === selection.sessionId);
+            const result = uniqueSession(await sessions({ projectId: selection.projectId, workspaceId: selection.workspaceId }, signal), selection.sessionId);
             if (result === undefined) throw new Error("Catalog selected session is stale or unavailable");
             return result;
           }),
@@ -136,6 +136,11 @@ export function createServerPluginCatalogCapabilityFactory(
 function absolutePath(path: string): string {
   if (!isAbsolute(path)) throw new Error("Catalog authority returned a non-absolute path");
   return resolve(path);
+}
+function uniqueSession(rows: readonly PluginSessionSnapshot[], sessionId: string): PluginSessionSnapshot | undefined {
+  const matches = rows.filter((row) => row.id === sessionId);
+  if (matches.length > 1) throw new Error("Catalog selected session is ambiguous");
+  return matches[0];
 }
 function projectSnapshot(project: { id: string; name: string; path: string }) {
   return { id: project.id, name: project.name, path: absolutePath(project.path) };
