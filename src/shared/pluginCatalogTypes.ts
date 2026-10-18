@@ -39,6 +39,7 @@ export interface PluginSessionHistoryPage {
   readonly start: number;
   readonly total: number;
 }
+const DEFAULT_HISTORY_PAGE_SIZE = 100;
 export interface PluginCatalogReadOptions { readonly signal?: AbortSignal }
 export interface PluginCatalogV1 {
   readonly version: 1;
@@ -107,13 +108,13 @@ function snapshotCatalog(value: unknown): PluginCatalogV1 {
       ...(historyReader === undefined ? {} : {
         readMessages: async (selection: PluginSessionSelection, page?: PluginSessionHistoryPageRequest, options?: PluginCatalogReadOptions) => {
           const requested = snapshotSelection(selection, true);
-          const requestedPage = page === undefined ? undefined : snapshotHistoryPage(page);
+          const requestedPage = snapshotHistoryPage(page ?? { limit: DEFAULT_HISTORY_PAGE_SIZE });
           const result = record(await historyReader(requested, requestedPage, options));
           const messages = unknownArray(result["messages"]);
           const start = integer(result["start"]);
           const total = integer(result["total"]);
           if (messages === undefined || start === undefined || total === undefined || start < 0 || total < 0) throw invalid();
-          return Object.freeze({ messages: Object.freeze(messages.map((message: unknown) => message)), start, total });
+          return Object.freeze({ messages: Object.freeze(messages.map(snapshotMessage)), start, total });
         },
       }),
     }),
@@ -139,8 +140,8 @@ function snapshotHistoryPage(value: PluginSessionHistoryPageRequest): PluginSess
   const row = record(value);
   if (Reflect.ownKeys(row).some((key) => typeof key !== "string" || (key !== "before" && key !== "limit"))) throw invalid();
   const before = boundedInteger(row["before"], 0, 1_000_000);
-  const limit = boundedInteger(row["limit"], 1, 100);
-  return Object.freeze({ ...(before === undefined ? {} : { before }), ...(limit === undefined ? {} : { limit }) });
+  const limit = boundedInteger(row["limit"], 1, 100) ?? DEFAULT_HISTORY_PAGE_SIZE;
+  return Object.freeze({ ...(before === undefined ? {} : { before }), limit });
 }
 function boundedInteger(value: unknown, min: number, max: number): number | undefined {
   if (value === undefined) return undefined;
@@ -153,6 +154,15 @@ function integer(value: unknown): number | undefined {
 function unknownArray(value: unknown): readonly unknown[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.map((item: unknown) => item);
+}
+function snapshotMessage(value: unknown): unknown {
+  const clone = structuredClone(value);
+  return freezeTree(clone);
+}
+function freezeTree<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freezeTree(child);
+  return Object.freeze(value);
 }
 function snapshotProject(value: unknown): PluginCatalogProject {
   const row = record(value);
