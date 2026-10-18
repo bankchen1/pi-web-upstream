@@ -9,6 +9,79 @@ import type { NavigationFreshness } from "./types";
 import { emptyTranscriptApi as defaultApi, deferred, emptyPage, FakeSocket, MemoryStorage, oldSession, sessionKey, sessionLookupId, status, workspace, type AppState, type SessionInfo } from "./sessionController.testSupport";
 
 describe("SessionController pending starts", () => {
+  it("inherits the selected session model and thinking level when no defaults are pinned", async () => {
+    const started: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    let state: AppState = {
+      ...initialAppState(),
+      selectedWorkspace: workspace,
+      selectedSession: oldSession,
+      sessions: [oldSession],
+      sessionStatuses: {
+        [oldSession.id]: { ...status(oldSession.id), model: { provider: "openai", id: "gpt-5" }, thinkingLevel: "high" },
+      },
+    };
+    let startSelection: { provider?: string; modelId?: string; thinkingLevel?: string } | undefined;
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      {
+        api: {
+          ...defaultApi,
+          getSessionDefaults: () => Promise.resolve({}),
+          modelCatalog: () => Promise.resolve({ models: [{ provider: "openai", id: "gpt-5", enabled: true }] }),
+          startSession: (_cwd, _machineId, _startupToken, selection) => {
+            startSelection = selection;
+            return Promise.resolve(started);
+          },
+        },
+        socket: new FakeSocket(),
+      },
+    );
+
+    await controller.startSession();
+
+    expect(startSelection).toEqual({ provider: "openai", modelId: "gpt-5", thinkingLevel: "high" });
+    expect(state.selectedSession?.id).toBe("started-session");
+  });
+
+  it("prefers a valid saved model pin and its new-session thinking default", async () => {
+    const started: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    let state: AppState = {
+      ...initialAppState(),
+      selectedWorkspace: workspace,
+      selectedSession: oldSession,
+      sessions: [oldSession],
+      sessionStatuses: {
+        [oldSession.id]: { ...status(oldSession.id), model: { provider: "openai", id: "gpt-5" }, thinkingLevel: "low" },
+      },
+    };
+    let startSelection: { provider?: string; modelId?: string; thinkingLevel?: string } | undefined;
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      {
+        api: {
+          ...defaultApi,
+          getSessionDefaults: () => Promise.resolve({ defaultProvider: "anthropic", defaultModel: "claude-sonnet-4-5" }),
+          modelCatalog: () => Promise.resolve({ models: [{ provider: "anthropic", id: "claude-sonnet-4-5", enabled: true }] }),
+          startSession: (_cwd, _machineId, _startupToken, selection) => {
+            startSelection = selection;
+            return Promise.resolve(started);
+          },
+        },
+        socket: new FakeSocket(),
+      },
+    );
+
+    await controller.startSession();
+
+    expect(startSelection).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-5", thinkingLevel: "high" });
+  });
+
   it("creates and selects a temporary editable session before backend start resolves", async () => {
     const started: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
     const startRequest = deferred<SessionInfo>();

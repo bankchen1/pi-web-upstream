@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { KNOWN_THINKING_LEVELS, isKnownThinkingLevel, thinkingGauge, thinkingLevelLabel } from "./thinkingLevels";
+import { DEFAULT_NEW_SELECTION_THINKING_LEVEL, KNOWN_THINKING_LEVELS, isKnownThinkingLevel, thinkingGauge, thinkingLevelLabel } from "./thinkingLevels";
 
 // Compile-time drift guard: if pi ADDS a thinking level we do not know about,
 // `Extra` becomes that level and this assignment fails to type-check. Combined
@@ -13,6 +13,10 @@ const _noUnknownLevels: Extra extends never ? true : never = true;
 void _noUnknownLevels;
 
 describe("thinkingLevels", () => {
+  it("uses a supported new-session default effort", () => {
+    expect(KNOWN_THINKING_LEVELS).toContain(DEFAULT_NEW_SELECTION_THINKING_LEVEL);
+  });
+
   it("recognizes all known levels and rejects others", () => {
     for (const level of KNOWN_THINKING_LEVELS) expect(isKnownThinkingLevel(level)).toBe(true);
     expect(isKnownThinkingLevel("ultra")).toBe(false);

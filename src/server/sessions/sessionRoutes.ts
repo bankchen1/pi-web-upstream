@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type AskUserAnswer, type AskUserSubmission, type ExtensionDialogAnswerRequest, type ExtensionDialogCancelRequest, type SessionBulkMutationRequest, type SessionBulkMutationRef, type SessionCleanupRequest, type SessionModelScopeMode, type SessionTreeForkRequest, type SessionTreeNavigateRequest, type SessionTreeSummaryChoice, type SessionUnreadAcknowledgeRequest } from "../../shared/apiTypes.js";
 import { parseSessionDefaultsUpdate } from "../../shared/sessionDefaults.js";
+import { isKnownThinkingLevel } from "../../shared/thinkingLevels.js";
 import { projectBrowserMessageResponse, projectBrowserStreamSnapshot, projectBrowserTranscriptSnapshot, type BrowserImageProjector } from "../browserMessageProjection.js";
 import { isSessionMediaId, SESSION_MEDIA_MODE } from "../../shared/sessionMedia.js";
 import { isSessionImageMimeType } from "./sessionMediaIndex.js";
@@ -48,14 +49,23 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
-  app.post<{ Body: { cwd?: unknown; startupToken?: unknown } | undefined }>(`${prefix}/sessions`, async (request, reply) => {
+  app.post<{ Body: { cwd?: unknown; startupToken?: unknown; provider?: unknown; modelId?: unknown; thinkingLevel?: unknown } | undefined }>(`${prefix}/sessions`, async (request, reply) => {
     try {
       const body = requireRecord(request.body);
       // An opaque label the caller uses to recognise its own construction's
       // startup reports. Optional: only a browser row waiting for a session id
       // has anything to correlate.
       const startupToken = body["startupToken"] === undefined ? undefined : requireNonEmptyString(body, "startupToken");
-      return await sessions.start(normalizeRequestCwd(requireString(body, "cwd")), optionalField("startupToken", startupToken));
+      const provider = body["provider"] === undefined ? undefined : requireNonEmptyString(body, "provider");
+      const modelId = body["modelId"] === undefined ? undefined : requireNonEmptyString(body, "modelId");
+      if ((provider === undefined) !== (modelId === undefined)) throw new Error("provider and modelId must both be provided");
+      const thinkingLevel = body["thinkingLevel"] === undefined ? undefined : requireString(body, "thinkingLevel");
+      if (thinkingLevel !== undefined && !isKnownThinkingLevel(thinkingLevel)) throw new Error("thinkingLevel field is invalid");
+      return await sessions.start(normalizeRequestCwd(requireString(body, "cwd")), {
+        ...optionalField("startupToken", startupToken),
+        ...(provider === undefined || modelId === undefined ? {} : { initialModel: { provider, id: modelId } }),
+        ...(thinkingLevel === undefined ? {} : { initialThinkingLevel: thinkingLevel }),
+      });
     } catch (error) {
       return reply.code(400).send({ error: errorMessage(error) });
     }

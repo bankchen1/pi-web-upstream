@@ -1646,6 +1646,9 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private async startSession(cwd: string, options: InternalStartSessionOptions): Promise<ClientSession> {
+    if (options.initialModel !== undefined && this.modelRuntime.getModel(options.initialModel.provider, options.initialModel.id) === undefined) {
+      throw new Error(`Model is not available: ${options.initialModel.provider}/${options.initialModel.id}`);
+    }
     const metadata = options.metadata === undefined ? undefined : requireSessionUiMetadata(options.metadata);
     const name = options.name === undefined ? undefined : requireInitialSessionName(options.name);
     const manager = this.sessionManager.create(cwd, options.parentSession === undefined ? undefined : { parentSession: options.parentSession });

@@ -15,6 +15,9 @@ export type { ThinkingLevel };
  */
 export const KNOWN_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 
+/** Default effort for new UI-created sessions when no saved pin exists. */
+export const DEFAULT_NEW_SELECTION_THINKING_LEVEL = "high" as const satisfies ThinkingLevel;
+
 export function isKnownThinkingLevel(value: string): value is ThinkingLevel {
   return KNOWN_THINKING_LEVELS.some((level) => level === value);
 }

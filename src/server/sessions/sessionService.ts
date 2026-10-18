@@ -56,7 +56,7 @@ export interface SessionRouteService {
    * it can recognise this construction's startup progress reports; the service
    * echoes it and never interprets it.
    */
-  start(cwd: string, options?: { startupToken?: string }): Promise<ClientSession>;
+  start(cwd: string, options?: { startupToken?: string; initialModel?: { provider: string; id: string }; initialThinkingLevel?: import("../../shared/thinkingLevels.js").ThinkingLevel }): Promise<ClientSession>;
   messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage>;
   /** Resolve image bytes without modifying the Pi transcript or runtime. */
   media(ref: SessionRouteRef, mediaId: string): Promise<SessionMedia | undefined>;

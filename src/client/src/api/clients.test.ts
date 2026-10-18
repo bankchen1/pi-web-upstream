@@ -326,13 +326,13 @@ describe("session API compatibility", () => {
     ]);
 
     await sessionsApi.startSession("/repo", "remote a", "pending-session-3-k2x9");
-    await sessionsApi.startSession("/repo", "remote a");
+    await sessionsApi.startSession("/repo", "remote a", undefined, { provider: "openai", modelId: "gpt-5", thinkingLevel: "high" });
 
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions");
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ cwd: "/repo", startupToken: "pending-session-3-k2x9" });
     // The token is optional, so a caller with no row to label sends none rather
     // than an empty one.
-    expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: "/repo" });
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: "/repo", provider: "openai", modelId: "gpt-5", thinkingLevel: "high" });
   });
 
   it("adds cwd context when session refs include a workspace", async () => {

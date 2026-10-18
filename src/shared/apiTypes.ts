@@ -1028,6 +1028,13 @@ export interface SessionModel {
   reasoning?: unknown;
 }
 
+/** Optional model and reasoning selection for a newly created session. */
+export interface SessionStartSelection {
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: string;
+}
+
 /**
  * One row of a session machine's full available-model catalog: the model plus
  * its membership in pi's effective enabled-models scope (`enabledModels`

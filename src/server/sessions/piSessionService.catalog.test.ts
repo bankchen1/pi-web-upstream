@@ -1,8 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService } from "./piSessionService.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreator, sessionGateway, sessionRecord, testModelRuntime } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreator, sessionGateway, sessionRecord, testModel, testModelRuntime } from "./piSessionService.testSupport.js";
 
 describe("read-only session catalog", () => {
+  it("rejects a new session's unknown model before allocating its session record", async () => {
+    const gateway = sessionGateway([]);
+    const create = vi.spyOn(gateway, "create");
+    const service = new PiSessionService(new CapturingSessionEventHub(), { agentDir: "/tmp/pi-web-test-agent", modelRuntime: testModelRuntime, sessionManager: gateway, archiveStore: emptyArchiveStore() });
+    try {
+      await expect(service.start("/workspace", { initialModel: { ...testModel(), provider: "missing-provider", id: "missing-model" } })).rejects.toThrow("Model is not available: missing-provider/missing-model");
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("lists cold conversations without opening a runtime or leaking transcript/file fields", async () => {
     const gateway = sessionGateway([{ ...sessionRecord("cold"), firstMessage: "private text" }]);
     const open = vi.spyOn(gateway, "open");

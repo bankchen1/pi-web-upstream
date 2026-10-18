@@ -17,6 +17,7 @@ import { fileCompletionInsertText } from "../promptCompletions";
 import { SessionSocket, type GlobalSessionEvent, type SessionUiEvent } from "../sessionSocket";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
 import { isSessionActive } from "../../../shared/activity";
+import { DEFAULT_NEW_SELECTION_THINKING_LEVEL } from "../../../shared/thinkingLevels.js";
 import type { PromptAttachmentDelivery, SessionNotificationInboxEvent, SessionStartupProgressEvent } from "../../../shared/apiTypes";
 import { InMemorySessionSelectionMemory, markSessionArchived, markSessionsArchived, selectPreferredSession, selectionAfterArchivingSession, selectionAfterArchivingSessions, shouldDeselectAfterArchivedCollapse, type SessionSelectionMemory } from "./sessionSelection";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection, type SetState, type UpdateUrl } from "./types";
@@ -276,6 +277,13 @@ export class SessionController {
     const workspace = this.getState().selectedWorkspace;
     if (!workspace) return;
     const machineId = selectedMachineId(this.getState());
+    const selectedSession = this.getState().selectedSession;
+    const defaultsRequest = selectedSession === undefined || isClientPendingStartSessionInfo(selectedSession)
+      ? undefined
+      : this.getSessionDefaults();
+    const inheritedStatus = selectedSession === undefined || isClientPendingStartSessionInfo(selectedSession)
+      ? undefined
+      : this.getState().sessionStatuses[selectedSession.id];
     const pendingUrlPublished = options?.updateUrl !== false;
     const pending = this.createPendingSessionStart(workspace, machineId, this.navigationSelection(), pendingUrlPublished);
     this.pendingSessionStarts.set(pending.tempId, pending);
@@ -287,7 +295,39 @@ export class SessionController {
     // published-token handoffs; freshness also protects unpublished starts.
     pending.navigation = this.beginNavigationOperation?.(PENDING_SESSION_START_SCOPE);
     try {
-      const session = await this.api.startSession(workspace.path, machineId, pending.tempId);
+      const defaults = defaultsRequest === undefined ? undefined : await defaultsRequest;
+      const pinnedModel = defaults?.defaultProvider !== undefined && defaults.defaultModel !== undefined
+        ? { provider: defaults.defaultProvider, modelId: defaults.defaultModel }
+        : undefined;
+      const inheritedModel = inheritedStatus?.model?.provider !== undefined && inheritedStatus.model.id !== undefined
+        ? { provider: inheritedStatus.model.provider, modelId: inheritedStatus.model.id }
+        : undefined;
+      let selectedModel = pinnedModel;
+      let selectedThinkingLevel = pinnedModel === undefined
+        ? inheritedStatus?.thinkingLevel ?? (inheritedModel === undefined ? undefined : DEFAULT_NEW_SELECTION_THINKING_LEVEL)
+        : DEFAULT_NEW_SELECTION_THINKING_LEVEL;
+      if (selectedSession !== undefined && !isClientPendingStartSessionInfo(selectedSession) && (pinnedModel !== undefined || inheritedModel !== undefined)) {
+        try {
+          const availableModels = (await this.api.modelCatalog(selectedSession, machineId)).models;
+          const isAvailable = (candidate: typeof pinnedModel) => candidate !== undefined
+            && availableModels.some((model) => model.provider === candidate.provider && model.id === candidate.modelId);
+          if (!isAvailable(selectedModel)) selectedModel = isAvailable(inheritedModel) ? inheritedModel : undefined;
+          if (selectedModel === inheritedModel && inheritedModel !== undefined) {
+            selectedThinkingLevel = defaults?.defaultThinkingLevel ?? inheritedStatus?.thinkingLevel ?? DEFAULT_NEW_SELECTION_THINKING_LEVEL;
+          } else if (selectedModel === undefined) {
+            selectedThinkingLevel = defaults?.defaultThinkingLevel;
+          }
+        } catch {
+          selectedModel = undefined;
+          selectedThinkingLevel = defaults?.defaultThinkingLevel;
+        }
+      }
+      const thinkingLevel = defaults?.defaultThinkingLevel ?? selectedThinkingLevel;
+      const selection = {
+        ...(selectedModel ?? {}),
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+      };
+      const session = await this.api.startSession(workspace.path, machineId, pending.tempId, selection);
       await this.resolvePendingSessionStart(pending.tempId, session);
     } catch (error) {
       this.failPendingSessionStart(pending.tempId, error);

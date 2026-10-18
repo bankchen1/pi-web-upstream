@@ -1398,18 +1398,24 @@ describe("session routes", () => {
 
     try {
       const requestCwd = resolve("/repo");
-      const withToken = await routeApp.inject({ method: "POST", url: "/sessions", payload: { cwd: requestCwd, startupToken: "pending-session-3-k2x9" } });
+      const withToken = await routeApp.inject({ method: "POST", url: "/sessions", payload: { cwd: requestCwd, startupToken: "pending-session-3-k2x9", provider: "openai", modelId: "gpt-5", thinkingLevel: "high" } });
       const withoutToken = await routeApp.inject({ method: "POST", url: "/sessions", payload: { cwd: requestCwd } });
       // An older browser, or any non-browser caller, sends no token; and a
       // malformed one must not reach the service as a label it would echo.
       const malformedToken = await routeApp.inject({ method: "POST", url: "/sessions", payload: { cwd: requestCwd, startupToken: 7 } });
+      const partialModel = await routeApp.inject({ method: "POST", url: "/sessions", payload: { cwd: requestCwd, provider: "openai" } });
+      const invalidThinkingLevel = await routeApp.inject({ method: "POST", url: "/sessions", payload: { cwd: requestCwd, thinkingLevel: "ultra" } });
 
       expect(withToken.statusCode).toBe(200);
       expect(withoutToken.statusCode).toBe(200);
       expect(malformedToken.statusCode).toBe(400);
       expect(malformedToken.json()).toEqual({ error: "startupToken field must be a string" });
+      expect(partialModel.statusCode).toBe(400);
+      expect(partialModel.json()).toEqual({ error: "provider and modelId must both be provided" });
+      expect(invalidThinkingLevel.statusCode).toBe(400);
+      expect(invalidThinkingLevel.json()).toEqual({ error: "thinkingLevel field is invalid" });
       expect(routeService.startCalls).toEqual([
-        { cwd: requestCwd, startupToken: "pending-session-3-k2x9" },
+        { cwd: requestCwd, startupToken: "pending-session-3-k2x9", initialModel: { provider: "openai", id: "gpt-5" }, initialThinkingLevel: "high" },
         { cwd: requestCwd, startupToken: undefined },
       ]);
     } finally {
@@ -1476,7 +1482,7 @@ class CapturingRouteSessionService implements SessionRouteService {
   readonly cancelAskCalls: { lookup: SessionRouteRef; askId: string }[] = [];
   readonly answerDialogCalls: { lookup: SessionRouteRef; dialogId: string; value: ExtensionDialogAnswer }[] = [];
   readonly cancelDialogCalls: { lookup: SessionRouteRef; dialogId: string }[] = [];
-  readonly startCalls: { cwd: string; startupToken: string | undefined }[] = [];
+  readonly startCalls: { cwd: string; startupToken: string | undefined; initialModel?: { provider: string; id: string }; initialThinkingLevel?: string }[] = [];
   askError: Error | undefined;
   dialogError: Error | undefined;
   reloadError: Error | undefined;
@@ -1570,8 +1576,8 @@ class CapturingRouteSessionService implements SessionRouteService {
 
   list(): never { throw unusedRouteMethod("list"); }
 
-  start(cwd: string, options?: { startupToken?: string }): Promise<ClientSession> {
-    this.startCalls.push({ cwd, startupToken: options?.startupToken });
+  start(cwd: string, options?: { startupToken?: string; initialModel?: { provider: string; id: string }; initialThinkingLevel?: import("../../shared/thinkingLevels.js").ThinkingLevel }): Promise<ClientSession> {
+    this.startCalls.push({ cwd, startupToken: options?.startupToken, ...(options?.initialModel === undefined ? {} : { initialModel: options.initialModel }), ...(options?.initialThinkingLevel === undefined ? {} : { initialThinkingLevel: options.initialThinkingLevel }) });
     return Promise.resolve({ id: "session-1", path: "/tmp/session-1.jsonl", cwd, created: "2026-06-25T00:00:00.000Z", modified: "2026-06-25T00:00:00.000Z", messageCount: 0, firstMessage: "" });
   }
 
