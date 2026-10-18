@@ -24,13 +24,18 @@ export {
   type PluginCatalogProject,
   type PluginCatalogWorkspace,
   type PluginSessionSnapshot,
-  type PluginSessionHistoryPage,
-  type PluginSessionHistoryPageRequest,
   type PluginWorkspaceSelection,
   type PluginSessionSelection,
   type PluginCatalogReadOptions,
   type PluginCatalogV1,
 } from "./shared/pluginCatalogTypes.js";
+
+export {
+  PI_WEB_HOST_PI_SESSION_HISTORY_CAPABILITY,
+  type PluginSessionHistoryPage,
+  type PluginSessionHistoryPageRequest,
+  type PluginSessionHistoryV1,
+} from "./shared/pluginSessionHistoryTypes.js";
 
 /** Discover this package's local v5 backend on a hosted pi.events bus.
  * Throws synchronously outside PI WEB or when the paired backend is unavailable.

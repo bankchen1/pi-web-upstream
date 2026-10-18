@@ -29,9 +29,6 @@ function fixture() {
         { id: "busy", cwd: repositoryPath, archived: false, runtime: "busy", name: "Working" },
       ]);
     }),
-    inspectionMessages: vi.fn((ref: { id: string; cwd: string }, page?: { before?: number; limit?: number }) => Promise.resolve({
-      messages: [{ role: "user", content: `${ref.id}:${String(page?.limit ?? "all")}` }], start: 0, total: 1,
-    })),
   };
   const lifetime = new AbortController();
   const instance = createServerPluginCatalogCapabilityFactory({ projects, workspaces, sessions }).create({
@@ -61,18 +58,8 @@ describe("server plugin catalog capability", () => {
     expect(Object.isFrozen(sessions)).toBe(true);
     expect(Object.isFrozen(sessions[0]?.metadata?.["owner"])).toBe(true);
     expect(Object.isFrozen(workspaces[0]?.provider?.metadata)).toBe(true);
-    expect(Object.keys(f.catalog.sessions)).toEqual(["list", "get", "readMessages"]);
+    expect(Object.keys(f.catalog.sessions)).toEqual(["list", "get"]);
     expect(f.sessions.listCatalogSessions).toHaveBeenCalledWith(repositoryPath, expect.any(AbortSignal));
-  });
-
-  it("reads history only after rechecking project, workspace and session scope", async () => {
-    const f = fixture();
-    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { before: 4, limit: 10 })).resolves.toEqual({
-      messages: [{ role: "user", content: "cold:10" }], start: 0, total: 1,
-    });
-    expect(f.sessions.inspectionMessages).toHaveBeenCalledWith({ id: "cold", cwd: repositoryPath }, { before: 4, limit: 10 }, expect.any(AbortSignal));
-    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "missing" })).rejects.toThrow("session is stale or unavailable");
-    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "cold" }, { limit: 101 })).rejects.toThrow("Invalid PI WEB host catalog capability v1 data");
   });
 
   it("fails closed when a workspace contains duplicate session IDs", async () => {
@@ -83,8 +70,6 @@ describe("server plugin catalog capability", () => {
     ]);
 
     await expect(f.catalog.sessions.get({ ...selection, sessionId: "duplicate" })).rejects.toThrow("session is ambiguous");
-    await expect(f.catalog.sessions.readMessages?.({ ...selection, sessionId: "duplicate" })).rejects.toThrow("session is ambiguous");
-    expect(f.sessions.inspectionMessages).not.toHaveBeenCalled();
   });
 
   it("re-resolves authority and rejects stale workspaces, missing projects and sessions", async () => {

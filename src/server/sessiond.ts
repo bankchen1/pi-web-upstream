@@ -61,7 +61,9 @@ import { createServerPluginPiSessionsCapabilityFactory } from "./plugins/serverP
 import { createServerPluginPiSessionEventsCapabilityFactory } from "./plugins/serverPluginPiSessionEventsCapability.js";
 import { createServerPluginWorkspacesCapabilityFactory } from "./plugins/serverPluginWorkspacesCapability.js";
 import { createServerPluginCatalogCapabilityFactory } from "./plugins/serverPluginCatalogCapability.js";
+import { createServerPluginSessionHistoryCapabilityFactory } from "./plugins/serverPluginSessionHistoryCapability.js";
 import { PI_WEB_HOST_CATALOG_CAPABILITY } from "../shared/pluginCatalogTypes.js";
+import { PI_WEB_HOST_PI_SESSION_HISTORY_CAPABILITY } from "../shared/pluginSessionHistoryTypes.js";
 import { registerPluginCatalogRoutes } from "./sessiond/pluginCatalogRoutes.js";
 import {
   REQUIRED_TERMINAL_SERVICE_CAPABILITY,
@@ -230,7 +232,7 @@ async function createSessionDaemonRuntime() {
     }),
     noticeSink: (source, input) => { serverNotices.record({ ...input, source }); },
     dataDir: piWebDataDir(daemonEnvironment),
-    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY, PI_WEB_HOST_CATALOG_CAPABILITY],
+    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY, PI_WEB_HOST_CATALOG_CAPABILITY, PI_WEB_HOST_PI_SESSION_HISTORY_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
   let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
@@ -365,6 +367,7 @@ async function createSessionDaemonRuntime() {
     await serverPlugins.resumeWithHostCapabilityFactories([
       createServerPluginWorkspacesCapabilityFactory({ projects, workspaces: workspaceProviders }),
       createServerPluginCatalogCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
+      createServerPluginSessionHistoryCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
       createServerPluginPiSessionsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
       createServerPluginPiSessionEventsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
     ]);

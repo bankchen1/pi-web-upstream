@@ -32,16 +32,6 @@ export interface PluginWorkspaceSelection {
 export interface PluginSessionSelection extends PluginWorkspaceSelection {
     readonly sessionId: string;
 }
-export interface PluginSessionHistoryPageRequest {
-    readonly before?: number;
-    readonly limit?: number;
-    readonly allowPartialTurn?: boolean;
-}
-export interface PluginSessionHistoryPage {
-    readonly messages: readonly unknown[];
-    readonly start: number;
-    readonly total: number;
-}
 export interface PluginCatalogReadOptions {
     readonly signal?: AbortSignal;
 }
@@ -58,8 +48,6 @@ export interface PluginCatalogV1 {
     readonly sessions: {
         readonly list: (selection: PluginWorkspaceSelection, options?: PluginCatalogReadOptions) => Promise<readonly PluginSessionSnapshot[]>;
         readonly get: (selection: PluginSessionSelection, options?: PluginCatalogReadOptions) => Promise<PluginSessionSnapshot>;
-        /** Present when the host supports observational transcript reads. Never opens a cold runtime. */
-        readonly readMessages?: (selection: PluginSessionSelection, page?: PluginSessionHistoryPageRequest, options?: PluginCatalogReadOptions) => Promise<PluginSessionHistoryPage>;
     };
 }
 export declare const PI_WEB_HOST_CATALOG_CAPABILITY: PluginCapability<PluginCatalogV1, 1>;

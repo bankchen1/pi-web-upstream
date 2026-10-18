@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PI_WEB_HOST_CATALOG_CAPABILITY } from "./pluginCatalogTypes.js";
 
 function provider() {
@@ -8,10 +8,6 @@ function provider() {
     workspaces: { list: () => Promise.resolve([]), get: () => Promise.resolve({ id: "w", projectId: "p", path: "/repo", label: "Main", isMain: true, data: { secret: true } }) },
     sessions: { list: () => Promise.resolve([]), get: () => Promise.resolve({ id: "s", cwd: "/repo", archived: false, runtime: "idle", transcript: "secret", path: "/private/session.jsonl" }) },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 describe("catalog public contract", () => {
@@ -50,47 +46,4 @@ describe("catalog public contract", () => {
     await expect(Reflect.apply(catalog.workspaces.get, undefined, [{ projectId: "p", workspaceId: "w", path: "/injected" }])).rejects.toThrow("Invalid");
   });
 
-  it("supports an optional bounded history reader without breaking older catalog providers", async () => {
-    const legacy = PI_WEB_HOST_CATALOG_CAPABILITY.parse(provider());
-    expect(legacy.sessions.readMessages).toBeUndefined();
-    const source = {
-      ...provider(),
-      sessions: {
-        ...provider().sessions,
-        readMessages: (selection: { sessionId: string }, page?: { limit?: number }) => Promise.resolve({
-      messages: [{ role: "user", content: `${selection.sessionId}:${String(page?.limit)}` }], start: 0, total: 1,
-        }),
-      },
-    };
-    const catalog = PI_WEB_HOST_CATALOG_CAPABILITY.parse(source);
-    await expect(catalog.sessions.readMessages?.({ projectId: "p", workspaceId: "w", sessionId: "s" }, { before: 1, limit: 20 })).resolves.toEqual({
-      messages: [{ role: "user", content: "s:20" }], start: 0, total: 1,
-    });
-    await expect(catalog.sessions.readMessages?.({ projectId: "p", workspaceId: "w", sessionId: "s" }, { limit: 101 })).rejects.toThrow("Invalid");
-    const invalidSource = { ...source, sessions: { ...source.sessions, readMessages: () => Promise.resolve({ messages: "not-an-array", start: 0, total: 1 }) } };
-    await expect(PI_WEB_HOST_CATALOG_CAPABILITY.parse(invalidSource).sessions.readMessages?.({ projectId: "p", workspaceId: "w", sessionId: "s" })).rejects.toThrow("Invalid");
-  });
-
-  it("defaults history reads to a bounded detached immutable page", async () => {
-    const message = { role: "assistant", content: [{ type: "text", text: "answer" }] };
-    const readMessages = vi.fn(() => Promise.resolve({ messages: [message], start: 0, total: 1 }));
-    const catalog = PI_WEB_HOST_CATALOG_CAPABILITY.parse({
-      ...provider(),
-      sessions: { ...provider().sessions, readMessages },
-    });
-    const result = await catalog.sessions.readMessages?.({ projectId: "p", workspaceId: "w", sessionId: "s" });
-    const returnedMessage = result?.messages[0];
-    if (!isRecord(returnedMessage)) throw new Error("Expected a message record");
-    const returnedContent = returnedMessage["content"];
-    if (!Array.isArray(returnedContent) || !isRecord(returnedContent[0])) throw new Error("Expected nested message content");
-
-    expect(readMessages).toHaveBeenCalledWith({ projectId: "p", workspaceId: "w", sessionId: "s" }, { limit: 100 }, undefined);
-    expect(returnedMessage).not.toBe(message);
-    expect(returnedContent).not.toBe(message.content);
-    expect(Object.isFrozen(returnedMessage)).toBe(true);
-    expect(Object.isFrozen(returnedContent)).toBe(true);
-    expect(Object.isFrozen(returnedContent[0])).toBe(true);
-    expect(Reflect.set(returnedContent[0], "text", "changed")).toBe(false);
-    expect(message.content[0]?.text).toBe("answer");
-  });
 });

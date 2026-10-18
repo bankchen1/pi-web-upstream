@@ -5,8 +5,6 @@ import {
   type PluginCatalogV1,
   type PluginCatalogWorkspace,
   type PluginSessionSelection,
-  type PluginSessionHistoryPage,
-  type PluginSessionHistoryPageRequest,
   type PluginSessionSnapshot,
   type PluginWorkspaceSelection,
 } from "../../shared/pluginCatalogTypes.js";
@@ -20,8 +18,6 @@ export interface CreateServerPluginCatalogCapabilityOptions {
   readonly sessions: {
     /** Read disk/archive records and already-hosted runtimes only; never reconcile or open a runtime. */
     readonly listCatalogSessions: (cwd: string, signal?: AbortSignal) => Promise<readonly PluginSessionSnapshot[]>;
-    /** Read bounded history without opening a cold runtime. */
-    readonly inspectionMessages: (ref: { readonly id: string; readonly cwd: string }, page?: PluginSessionHistoryPageRequest, signal?: AbortSignal) => Promise<PluginSessionHistoryPage>;
   };
 }
 
@@ -87,22 +83,6 @@ export function createServerPluginCatalogCapabilityFactory(
         if (rows.some((row) => absolutePath(row.cwd) !== selected.path)) throw new Error("Catalog session is outside selected workspace");
         return rows;
       }
-      async function sessionMessages(
-        selection: PluginSessionSelection,
-        page: PluginSessionHistoryPageRequest | undefined,
-        signal: AbortSignal,
-      ): Promise<PluginSessionHistoryPage> {
-        const selected = await workspace(selection, signal);
-        const rows = await options.sessions.listCatalogSessions(selected.path, signal);
-        assertActive(signal);
-        if (rows.some((row) => absolutePath(row.cwd) !== selected.path)) throw new Error("Catalog session is outside selected workspace");
-        if (uniqueSession(rows, selection.sessionId) === undefined) {
-          throw new Error("Catalog selected session is stale or unavailable");
-        }
-        const result = await options.sessions.inspectionMessages({ id: selection.sessionId, cwd: selected.path }, page, signal);
-        assertActive(signal);
-        return result;
-      }
       const value = PI_WEB_HOST_CATALOG_CAPABILITY.parse({
         version: 1,
         projects: {
@@ -124,8 +104,6 @@ export function createServerPluginCatalogCapabilityFactory(
             if (result === undefined) throw new Error("Catalog selected session is stale or unavailable");
             return result;
           }),
-          readMessages: (selection: PluginSessionSelection, page?: PluginSessionHistoryPageRequest, requested?: PluginCatalogReadOptions) => read(requested, (signal) =>
-            sessionMessages(snapshotSessionSelection(selection), page, signal)),
         },
       });
       return Object.freeze({ value, dispose: () => { disposal.abort(); } });
@@ -144,11 +122,4 @@ function uniqueSession(rows: readonly PluginSessionSnapshot[], sessionId: string
 }
 function projectSnapshot(project: { id: string; name: string; path: string }) {
   return { id: project.id, name: project.name, path: absolutePath(project.path) };
-}
-
-function snapshotSessionSelection(value: PluginSessionSelection): PluginSessionSelection {
-  if (typeof value.projectId !== "string" || value.projectId === "" || typeof value.workspaceId !== "string" || value.workspaceId === "" || typeof value.sessionId !== "string" || value.sessionId === "") {
-    throw new Error("Catalog session selection is invalid");
-  }
-  return { projectId: value.projectId, workspaceId: value.workspaceId, sessionId: value.sessionId };
 }
